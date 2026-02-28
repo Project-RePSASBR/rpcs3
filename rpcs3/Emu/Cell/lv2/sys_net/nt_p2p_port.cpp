@@ -12,6 +12,42 @@
 
 LOG_CHANNEL(sys_net);
 
+namespace
+{
+	std::atomic<bool> s_psas_lan_mode_enabled = false;
+
+	bool is_psas_lan_beacon_impl(const u8* data, usz size)
+	{
+		if (!data || size < 27)
+		{
+			return false;
+		}
+
+		if (data[0] != 0xFF || data[1] != 0x83 || data[2] != 0x03)
+		{
+			return false;
+		}
+
+		if (data[11] != 0x45 || data[12] != 0x71 || data[13] != 0x29 || data[14] != 0x00)
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	bool is_psas_lan_payload_impl(const u8* data, usz size)
+	{
+		if (!data || size < 8)
+		{
+			return false;
+		}
+
+		return data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 &&
+			data[4] == 0x08 && data[5] == 0x45 && data[6] == 0x71 && data[7] == 0x29;
+	}
+} // namespace for PSASBR beacon helpers
+
 namespace sys_net_helpers
 {
 	bool all_reusable(const std::set<s32>& sock_ids)
@@ -66,42 +102,6 @@ namespace sys_net_helpers
 		}
 	}
 } // namespace sys_net_helpers
-
-namespace
-{
-	std::atomic<bool> s_psas_lan_mode_enabled = false;
-
-	bool is_psas_lan_beacon_impl(const u8* data, usz size)
-	{
-		if (!data || size < 27)
-		{
-			return false;
-		}
-
-		if (data[0] != 0xFF || data[1] != 0x83 || data[2] != 0x03)
-		{
-			return false;
-		}
-
-		if (data[11] != 0x45 || data[12] != 0x71 || data[13] != 0x29 || data[14] != 0x00)
-		{
-			return false;
-		}
-
-		return true;
-	}
-
-	bool is_psas_lan_payload_impl(const u8* data, usz size)
-	{
-		if (!data || size < 8)
-		{
-			return false;
-		}
-
-		return data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 &&
-			data[4] == 0x08 && data[5] == 0x45 && data[6] == 0x71 && data[7] == 0x29;
-	}
-} // namespace for PSASBR beacon helpers
 
 nt_p2p_port::nt_p2p_port(u16 port)
 	: port(port)
