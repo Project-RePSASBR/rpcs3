@@ -122,6 +122,24 @@ nt_p2p_port::nt_p2p_port(u16 port)
 
 	np::set_socket_non_blocking(p2p_socket);
 
+#ifdef _WIN32
+	// Windows queues an error on a UDP socket when one of OUR earlier sends
+	// bounced with ICMP port-unreachable, and the next recvfrom then fails
+	// with WSAECONNRESET. Consoles never see errors on UDP — and behind a
+	// loopback LAN gateway the ICMP is generated synchronously for any local
+	// endpoint that just closed, so the P2P receive pump choked on it right
+	// as a player left the lobby and the hosted game collapsed. Opt out.
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+	{
+		BOOL new_behaviour   = FALSE;
+		DWORD bytes_returned = 0;
+		if (WSAIoctl(p2p_socket, SIO_UDP_CONNRESET, &new_behaviour, sizeof(new_behaviour), nullptr, 0, &bytes_returned, nullptr, nullptr) != 0)
+			sys_net.error("Failed to disable SIO_UDP_CONNRESET on P2P socket: %s", get_last_error(true));
+	}
+#endif
+
 	u32 optval = 131072; // value obtained from DECR for a SOCK_DGRAM_P2P socket(should maybe be bigger for actual socket?)
 	if (setsockopt(p2p_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&optval), sizeof(optval)) != 0)
 		fmt::throw_exception("Error setsockopt SO_RCVBUF on P2P socket: %s", get_last_error(true));
@@ -230,6 +248,14 @@ bool nt_p2p_port::recv_data()
 	if (recv_res == -1)
 	{
 		auto lerr = get_last_error(false);
+		if (lerr == SYS_NET_ECONNRESET)
+		{
+			// an earlier send of ours bounced (ICMP port-unreachable echoed
+			// into the receive path) — the receive stream itself is fine:
+			// swallow it and keep draining, or one departed peer starves
+			// every remaining player's traffic
+			return true;
+		}
 		if (lerr != SYS_NET_EINPROGRESS && lerr != SYS_NET_EWOULDBLOCK)
 			sys_net.error("Error recvfrom on %s P2P socket: %d", np::is_ipv6_supported() ? "IPv6" : "IPv4", lerr);
 
