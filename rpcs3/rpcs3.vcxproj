@@ -70,7 +70,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\opencv\opencv\opencv412\build\include;$(SolutionDir)3rdparty\SoundTouch\soundtouch\include;$(SolutionDir)3rdparty\cubeb\extra;$(SolutionDir)3rdparty\cubeb\cubeb\include\;$(SolutionDir)build\lib\$(Configuration)-$(Platform)\protobuf_build\include;$(SolutionDir)3rdparty\wolfssl\wolfssl;$(SolutionDir)3rdparty\wolfssl\extra\win32;$(SolutionDir)3rdparty\curl\curl\include;$(SolutionDir)3rdparty\rtmidi\rtmidi;$(SolutionDir)3rdparty\libusb\libusb\libusb;$(VULKAN_SDK)\Include;$(SolutionDir)3rdparty\libsdl-org\SDL\include;$(QTDIR)\include;$(QTDIR)\include\QtCore;$(QTDIR)\include\QtConcurrent;$(QTDIR)\include\QtGui;$(QTDIR)\include\QtSvg;$(QTDIR)\include\QtSvgWidgets;$(QTDIR)\include\QtWidgets;$(QTDIR)\include\QtMultimedia;$(QTDIR)\mkspecs\win32-msvc;.\release;.\QTGeneratedFiles\$(ConfigurationName);.\QTGeneratedFiles;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>/Zc:__cplusplus -Zc:strictStrings -Zc:throwingNew- -w34100 -w34189 -w44996 -w44456 -w44457 -w44458 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/Zc:__cplusplus -Zc:strictStrings -Zc:throwingNew- -w34100 -w34189 -w44996 -w44456 -w44457 -w44458 /D "RPCS3_HAS_MEMORY_BREAKPOINTS" %(AdditionalOptions)</AdditionalOptions>
       <AssemblerListingLocation>release\</AssemblerListingLocation>
       <BrowseInformation>false</BrowseInformation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>

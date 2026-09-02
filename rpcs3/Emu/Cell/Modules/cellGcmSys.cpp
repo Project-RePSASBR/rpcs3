@@ -14,6 +14,12 @@
 
 LOG_CHANNEL(cellGcmSys);
 
+template <>
+void fmt_class_string<CellGcmContextData>::format(std::string& out, u64 arg)
+{
+	// It needs to be defined for some reason when building with memory breakpoints, but it's not necessary
+}
+
 template<>
 void fmt_class_string<CellGcmError>::format(std::string& out, u64 arg)
 {
