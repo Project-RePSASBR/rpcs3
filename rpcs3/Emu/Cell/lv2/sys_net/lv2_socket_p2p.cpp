@@ -1,8 +1,12 @@
 #include "stdafx.h"
 #include "lv2_socket_p2p.h"
+#include "Emu/system_config.h"
+#include "Emu/NP/np_handler.h"
 #include "Emu/NP/np_helpers.h"
 #include "network_context.h"
 #include "sys_net_helpers.h"
+
+#include <charconv>
 
 LOG_CHANNEL(sys_net);
 
@@ -280,16 +284,96 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 	const u16 p2p_vport = reinterpret_cast<const sys_net_sockaddr_in_p2p*>(&*opt_sn_addr)->sin_vport;
 
 	auto native_addr = sys_net_addr_to_native_addr(*opt_sn_addr);
+	auto& nph = g_fxo->get<named_thread<np::np_handler>>();
 
 	char ip_str[16];
 	inet_ntop(AF_INET, &native_addr.sin_addr, ip_str, sizeof(ip_str));
 	sys_net.trace("[P2P] Sending a packet to %s:%d:%d", ip_str, p2p_port, p2p_vport);
+
+	if (native_addr.sin_addr.s_addr == INADDR_BROADCAST && nph.get_bind_ip() == 0)
+	{
+		static bool s_warned_unbound_broadcast = false;
+		if (!std::exchange(s_warned_unbound_broadcast, true))
+		{
+			sys_net.warning("Sending broadcast P2P traffic from a wildcard-bound socket. Hosting on virtual LANs such as XLink Kai may require a specific Bind Address.");
+		}
+	}
 
 	int native_flags = 0;
 	if (flags & SYS_NET_MSG_WAITALL)
 	{
 		native_flags |= MSG_WAITALL;
 	}
+
+	// Forward unicast copies of broadcast P2P datagrams to the endpoints configured in
+	// "P2P Broadcast Forward" ("ip:port,ip:port"). This lets an external relay/gateway
+	// receive lobby beacons without sharing a broadcast domain with the emulator.
+	const bool is_broadcast_send = native_addr.sin_addr.s_addr == INADDR_BROADCAST;
+	const auto forward_broadcast_copies = [&](const void* data, u32 size)
+	{
+		if (!is_broadcast_send)
+		{
+			return;
+		}
+
+		const std::string cfg_fwd = g_cfg.net.p2p_broadcast_forward.to_string();
+
+		if (cfg_fwd.empty())
+		{
+			return;
+		}
+
+		for (usz start = 0; start < cfg_fwd.size();)
+		{
+			usz end = cfg_fwd.find(',', start);
+
+			if (end == std::string::npos)
+			{
+				end = cfg_fwd.size();
+			}
+
+			std::string entry = cfg_fwd.substr(start, end - start);
+			start = end + 1;
+
+			while (!entry.empty() && entry.front() == ' ')
+			{
+				entry.erase(entry.begin());
+			}
+
+			while (!entry.empty() && entry.back() == ' ')
+			{
+				entry.pop_back();
+			}
+
+			const usz sep = entry.rfind(':');
+			u16 fwd_port = 0;
+			auto fwd_addr = native_addr;
+
+			const bool valid = sep != std::string::npos && sep != 0 && sep + 1 < entry.size() &&
+				std::from_chars(entry.c_str() + sep + 1, entry.c_str() + entry.size(), fwd_port).ec == std::errc() &&
+				inet_pton(AF_INET, entry.substr(0, sep).c_str(), &fwd_addr.sin_addr) == 1;
+
+			if (!valid)
+			{
+				static bool s_warned_fwd_entry = false;
+				if (!std::exchange(s_warned_fwd_entry, true))
+				{
+					sys_net.error("P2P Broadcast Forward: invalid entry '%s' (expected ip:port)", entry);
+				}
+				continue;
+			}
+
+			fwd_addr.sin_port = std::bit_cast<u16, be_t<u16>>(fwd_port);
+
+			static bool s_logged_fwd = false;
+			if (!std::exchange(s_logged_fwd, true))
+			{
+				sys_net.notice("P2P Broadcast Forward active, first copy sent to %s", entry);
+			}
+
+			np::sendto_possibly_ipv6(native_socket, static_cast<const char*>(data), size, &fwd_addr, native_flags);
+		}
+	};
 
 	// --------- SECTION SPECIFIC TO PLAYSTATION ALL-STARS BATTLE ROYALE LAN MODE
 	const u16 local_vport = vport;
@@ -325,6 +409,8 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 			raw_psas = buf;
 		}
 
+		forward_broadcast_copies(raw_psas.data(), ::size32(raw_psas));
+
 		auto native_result = np::sendto_possibly_ipv6(native_socket, reinterpret_cast<const char*>(raw_psas.data()), ::size32(raw_psas), &native_addr, native_flags);
 
 		if (native_result >= 0)
@@ -350,6 +436,8 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 	memcpy(p2p_data.data() + sizeof(u16), &src_vport_le, sizeof(u16));
 	memcpy(p2p_data.data() + sizeof(u16) + sizeof(u16), &p2p_flags_le, sizeof(u16));
 	memcpy(p2p_data.data() + VPORT_P2P_HEADER_SIZE, buf.data(), buf.size());
+
+	forward_broadcast_copies(p2p_data.data(), ::size32(p2p_data));
 
 	auto native_result = np::sendto_possibly_ipv6(native_socket, reinterpret_cast<const char*>(p2p_data.data()), ::size32(p2p_data), &native_addr, native_flags);
 
