@@ -21,13 +21,15 @@ public:
 	explicit downloader(QWidget* parent = nullptr);
 	~downloader();
 
-	void start(const std::string& url, bool follow_location, bool show_progress_dialog, const QString& progress_dialog_title = "", bool keep_progress_dialog_open = false, int expected_size = -1, bool check_return_code = true, bool again = false);
+	void start(const std::string& url, bool follow_location, bool show_progress_dialog, bool check_return_code, const QString& progress_dialog_title = "", bool keep_progress_dialog_open = false, int expected_size = -1, bool again = false);
 	usz update_buffer(char* data, usz size);
 
 	void update_progress_dialog(const QString& title) const;
 	void close_progress_dialog();
 
 	progress_dialog* get_progress_dialog() const;
+
+	bool aborted() const { return m_curl_abort; }
 
 private Q_SLOTS:
 	void handle_buffer_update(int size, int max) const;

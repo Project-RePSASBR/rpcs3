@@ -8,6 +8,7 @@
 #include <QFont>
 #include <QIcon>
 #include <QLabel>
+#include <QMessageBox>
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QTreeWidgetItem>
@@ -23,6 +24,20 @@ namespace gui
 {
 	namespace utils
 	{
+		enum class align_h
+		{
+			left,
+			center,
+			right
+		};
+
+		enum class align_v
+		{
+			top,
+			center,
+			bottom
+		};
+
 		class circle_pixmap : public QPixmap
 		{
 		public:
@@ -104,6 +119,16 @@ namespace gui
 		// Returns a richtext paragraph with white-space: nowrap;
 		QString make_paragraph(QString text, const QString& white_space_style = "nowrap");
 
+		// Doubles the ampersands of a string used as menu or button text, so it is not taken for a mnemonic
+		QString escape_mnemonics(const QString& text);
+
+		// Shows a message box that takes its text literally. Qt detects rich text on its own, so a message
+		// built around a name the user chose turns into HTML as soon as that name looks like a tag, and the
+		// name disappears from the very sentence that is there to report it.
+		QMessageBox::StandardButton plain_message(QWidget* parent, QMessageBox::Icon icon, const QString& title,
+			const QString& text, QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+			QMessageBox::StandardButton default_button = QMessageBox::NoButton);
+
 		template <typename T>
 		void set_font_size(T& qobj, int size)
 		{
@@ -112,14 +137,11 @@ namespace gui
 			qobj.setFont(font);
 		}
 
-		// Returns a scaled, centered QPixmap
-		QPixmap get_centered_pixmap(QPixmap pixmap, const QSize& icon_size, int offset_x, int offset_y, qreal device_pixel_ratio, Qt::TransformationMode mode);
+		// Returns a scaled, aligned QPixmap
+		QPixmap get_aligned_pixmap(QPixmap pixmap, const QSize& icon_size, qreal device_pixel_ratio, Qt::TransformationMode mode, align_h h_alignment, align_v v_alignment);
 
-		// Returns a scaled, centered QPixmap
-		QPixmap get_centered_pixmap(const QString& path, const QSize& icon_size, int offset_x, int offset_y, qreal device_pixel_ratio, Qt::TransformationMode mode);
-
-		// Returns the part of the image loaded from path that is inside the bounding box of its opaque areas
-		QImage get_opaque_image_area(const QString& path);
+		// Returns a scaled, aligned QPixmap
+		QPixmap get_aligned_pixmap(const QString& path, const QSize& icon_size, qreal device_pixel_ratio, Qt::TransformationMode mode, align_h h_alignment, align_v v_alignment);
 
 		// Workaround: resize the dropdown combobox items
 		void resize_combo_box_view(QComboBox* combo);
@@ -182,10 +204,10 @@ namespace gui
 		}
 
 		// Loads an icon from an (ISO) archive file.
-		bool load_iso_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path);
+		bool load_iso_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path, const std::string& game_dir = {});
 
 		// Loads an icon (optionally from an (ISO) archive file).
-		bool load_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path);
+		bool load_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path, const std::string& game_dir = {});
 
 		template <typename T>
 		void stop_future_watcher(QFutureWatcher<T>& watcher, bool cancel, std::shared_ptr<atomic_t<bool>> cancel_flag = nullptr)

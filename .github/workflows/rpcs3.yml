@@ -22,31 +22,75 @@ env:
   BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
 
 jobs:
+  Clean_Code_Caches:
+    name: Clean caches
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Look for the 'Shaders' label on the merged PR
+        id: labels
+        if: github.event_name == 'push' && github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          found=false
+          for sha in $(jq -r '[.after, (.commits[]?.id)] | map(select(. != null)) | unique[]' "$GITHUB_EVENT_PATH"); do
+            labels=$(gh api "repos/${{ github.repository }}/commits/$sha/pulls" --jq '.[].labels[].name' 2>/dev/null || true)
+            echo "$sha: ${labels:-<no associated PR>}"
+            if grep -qix 'shaders' <<< "$labels"; then
+              found=true
+            fi
+          done
+          echo "shaders=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Remove all code caches
+        if: steps.labels.outputs.shaders == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.key | contains("-ccache-")) | "\(.id)\t\(.key)"' > code_caches.tsv
+          if [ ! -s code_caches.tsv ]; then
+            echo "No code caches to remove."
+            exit 0
+          fi
+          while IFS=$'\t' read -r id key; do
+            echo "Removing $key (id $id)"
+            gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" --silent
+          done < code_caches.tsv
+          echo "Removed $(wc -l < code_caches.tsv) code cache(s) after a 'Shaders' PR merge." >> "$GITHUB_STEP_SUMMARY"
+
   Linux_Build:
     # Only run push event on master branch of main repo, but run all PRs
+    needs: Clean_Code_Caches
     if: github.event_name != 'push' || (github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master')
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            docker_img: "rpcs3/rpcs3-ci-jammy:1.9"
+            docker_img: "rpcs3/rpcs3-ci-jammy:2.1"
             build_sh: "/rpcs3/.ci/build-linux.sh"
             compiler: clang
             UPLOAD_COMMIT_HASH: d812f1254a1157c80fd402f94446310560f54e5f
             UPLOAD_REPO_FULL_NAME: "rpcs3/rpcs3-binaries-linux"
           - os: ubuntu-24.04
-            docker_img: "rpcs3/rpcs3-ci-jammy:1.9"
+            docker_img: "rpcs3/rpcs3-ci-jammy:2.1"
             build_sh: "/rpcs3/.ci/build-linux.sh"
             compiler: gcc
           - os: ubuntu-24.04-arm
-            docker_img: "rpcs3/rpcs3-ci-jammy-aarch64:1.9"
+            docker_img: "rpcs3/rpcs3-ci-jammy-aarch64:2.1"
             build_sh: "/rpcs3/.ci/build-linux-aarch64.sh"
             compiler: clang
             UPLOAD_COMMIT_HASH: a1d35836e8d45bfc6f63c26f0a3e5d46ef622fe1
             UPLOAD_REPO_FULL_NAME: "rpcs3/rpcs3-binaries-linux-arm64"
           - os: ubuntu-24.04-arm
-            docker_img: "rpcs3/rpcs3-ci-jammy-aarch64:1.9"
+            docker_img: "rpcs3/rpcs3-ci-jammy-aarch64:2.1"
             build_sh: "/rpcs3/.ci/build-linux-aarch64.sh"
             compiler: gcc
     name: RPCS3 Linux ${{ matrix.os }} ${{ matrix.compiler }}
@@ -117,31 +161,31 @@ jobs:
 
   Mac_Build:
     # Only run push event on master branch of main repo, but run all PRs
+    needs: Clean_Code_Caches
     if: github.event_name != 'push' || (github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master')
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Intel
-            AARCH64: 0
+            runs-on: macos-15-intel
             UPLOAD_COMMIT_HASH: 51ae32f468089a8169aaf1567de355ff4a3e0842
             UPLOAD_REPO_FULL_NAME: rpcs3/rpcs3-binaries-mac
           - name: Apple Silicon
-            AARCH64: 1
+            runs-on: macos-15
             UPLOAD_COMMIT_HASH: 8e21bdbc40711a3fccd18fbf17b742348b0f4281
             UPLOAD_REPO_FULL_NAME: rpcs3/rpcs3-binaries-mac-arm64
     name: RPCS3 Mac ${{ matrix.name }} 
-    runs-on: macos-14
+    runs-on: ${{ matrix.runs-on }} 
     env:
       CCACHE_DIR: /tmp/ccache_dir
-      QT_VER: '6.10.2'
+      QT_VER: '6.11.2'
       QT_VER_MAIN: '6'
-      LLVM_COMPILER_VER: '21'
+      LLVM_COMPILER_VER: '22'
       RELEASE_MESSAGE: ../GitHubReleaseMessage.txt
       UPLOAD_COMMIT_HASH: ${{ matrix.UPLOAD_COMMIT_HASH }}
       UPLOAD_REPO_FULL_NAME: ${{ matrix.UPLOAD_REPO_FULL_NAME }}
-      AARCH64: ${{ matrix.AARCH64 }}
-      RUN_UNIT_TESTS: github.event_name == 'pull_request' && 'ON' || 'OFF'
+      RUN_UNIT_TESTS: ${{ matrix.name == 'Apple Silicon' && (github.event_name == 'pull_request' && 'ON') || 'OFF' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@main
@@ -207,23 +251,25 @@ jobs:
 
   Windows_Build:
     # Only run push event on master branch of main repo, but run all PRs
+    needs: Clean_Code_Caches
     if: github.event_name != 'push' || (github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master')
     name: RPCS3 Windows
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     env:
       COMPILER: msvc
       QT_VER_MAIN: '6'
-      QT_VER: '6.10.2'
+      QT_VER: '6.11.2'
       QT_VER_MSVC: 'msvc2022'
-      QT_DATE: '202601261212'
-      LLVM_VER: '19.1.7'
-      VULKAN_VER: '1.3.268.0'
-      VULKAN_SDK_SHA: '8459ef49bd06b697115ddd3d97c9aec729e849cd775f5be70897718a9b3b9db5'
+      QT_DATE: '202608131017'
+      LLVM_VER: '22.1.8'
+      VULKAN_VER: '1.4.341.1'
+      VULKAN_SDK_SHA: 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
       CCACHE_SHA: '859141059ac950e1e8cd042c66f842f26b9e3a62a1669a69fe6ba180cb58bbdf'
       CCACHE_BIN_DIR: 'C:\ccache_bin'
       CCACHE_DIR: 'C:\ccache'
       CCACHE_INODECACHE: 'true'
       CCACHE_SLOPPINESS: 'time_macros'
+      CCACHE_LAUNCH_ARGS: '-DCMAKE_C_COMPILER_LAUNCHER=C:\ccache_bin\ccache.exe -DCMAKE_CXX_COMPILER_LAUNCHER=C:\ccache_bin\ccache.exe'
       DEPS_CACHE_DIR: ./dependency_cache
       UPLOAD_COMMIT_HASH: 7d09e3be30805911226241afbb14f8cdc2eb054e
       UPLOAD_REPO_FULL_NAME: "RPCS3/rpcs3-binaries-win"
@@ -235,7 +281,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup NuGet
-        uses: nuget/setup-nuget@v2
+        uses: nuget/setup-nuget@v4
 
       - name: Restore NuGet packages
         run: nuget restore rpcs3.sln
@@ -328,6 +374,7 @@ jobs:
 
   Windows_Build_Clang:
     # Only run push event on master branch of main repo, but run all PRs
+    needs: Clean_Code_Caches
     if: github.event_name != 'push' || (github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master')
     strategy:
       fail-fast: false
@@ -437,6 +484,7 @@ jobs:
 
   FreeBSD_Build:
       # Only run push event on master branch of main repo, but run all PRs
+    needs: Clean_Code_Caches
     if: github.event_name != 'push' || (github.repository == 'RPCS3/rpcs3' && github.ref_name == 'master')
     name: RPCS3 FreeBSD 
     runs-on: ubuntu-latest
@@ -444,10 +492,10 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       QT_VER_MAIN: '6'
-      LLVM_COMPILER_VER: '-devel'
-      CC: 'clang-devel'
-      CXX: 'clang++-devel'
-      LLVM_CONFIG: 'llvm-config-devel'
+      LLVM_COMPILER_VER: '22'
+      LLVM_CONFIG: 'llvm-config22'
+      CC: 'clang22'
+      CXX: 'clang++22'
 
     steps:
       - name: Checkout repository
@@ -470,7 +518,7 @@ jobs:
           envs: 'QT_VER_MAIN LLVM_COMPILER_VER CCACHE_DIR CC CXX LLVM_CONFIG'
           usesh: true
           copyback: false
-          release: "14.3"
+          release: "14.4"
           run: .ci/install-freebsd.sh && .ci/build-freebsd.sh
 
       - name: Save Build Ccache

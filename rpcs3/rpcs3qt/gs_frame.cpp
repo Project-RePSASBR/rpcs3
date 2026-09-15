@@ -15,7 +15,9 @@
 #include "Emu/Cell/Modules/cellScreenshot.h"
 #include "Emu/Cell/Modules/cellAudio.h"
 #include "Emu/Cell/lv2/sys_rsxaudio.h"
-#include "Emu/RSX/rsx_utils.h"
+#include "Emu/RSX/RSXThread.h"
+#include "Emu/RSX/Utils/image_utils.hpp"
+#include "Emu/RSX/Utils/rsx_utils.h"
 #include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/Io/interception.h"
 #include "Emu/Io/recording_config.h"
@@ -73,7 +75,11 @@ gs_frame::gs_frame(QScreen* screen, const QRect& geometry, const QIcon& appIcon,
 {
 	m_window_title = Emu.GetFormattedTitle(0);
 
-	if (!g_cfg_recording.load())
+	if (g_cfg_recording.load())
+	{
+		gui_log.notice("Using recording config:\n%s", g_cfg_recording.to_string());
+	}
+	else
 	{
 		gui_log.notice("Could not load recording config. Using defaults.");
 	}
@@ -320,6 +326,14 @@ void gs_frame::handle_shortcut(gui::shortcuts::shortcut shortcut_key, const QKey
 		}
 		break;
 	}
+	case gui::shortcuts::shortcut::gw_stop:
+	{
+		if (!Emu.IsStopped())
+		{
+			Emu.GracefulShutdown(true, true);
+		}
+		break;
+	}
 	case gui::shortcuts::shortcut::gw_restart:
 	case gui::shortcuts::shortcut::gw_savestate_1:
 	case gui::shortcuts::shortcut::gw_savestate_2:
@@ -361,7 +375,7 @@ void gs_frame::handle_shortcut(gui::shortcuts::shortcut shortcut_key, const QKey
 		{
 			Emu.after_kill_callback = []()
 			{
-				Emu.Restart();
+				Emu.Restart(true, false);
 			};
 
 			// Make sure we keep the game window opened
@@ -518,7 +532,7 @@ void gs_frame::toggle_recording()
 		m_video_encoder->set_path(video_path);
 		m_video_encoder->set_framerate(g_cfg_recording.video.framerate);
 		m_video_encoder->set_video_bitrate(g_cfg_recording.video.video_bps);
-		m_video_encoder->set_video_codec(g_cfg_recording.video.video_codec);
+		m_video_encoder->set_video_codec(g_cfg_recording.video.codec_id, g_cfg_recording.video.codec_name.get());
 		m_video_encoder->set_max_b_frames(g_cfg_recording.video.max_b_frames);
 		m_video_encoder->set_gop_size(g_cfg_recording.video.gop_size);
 		m_video_encoder->set_output_format(output_format);
@@ -548,7 +562,7 @@ void gs_frame::toggle_recording()
 		}
 
 		m_video_encoder->set_audio_bitrate(g_cfg_recording.audio.audio_bps);
-		m_video_encoder->set_audio_codec(g_cfg_recording.audio.audio_codec);
+		m_video_encoder->set_audio_codec(g_cfg_recording.audio.codec_id, g_cfg_recording.audio.codec_name.get());
 		m_video_encoder->encode();
 
 		if (m_video_encoder->has_error)
@@ -638,7 +652,7 @@ void gs_frame::hide_on_close()
 {
 	// Make sure not to save the hidden state, which is useless to us.
 	const Visibility current_visibility = visibility();
-	m_gui_settings->SetValue(gui::gs_visibility, current_visibility == Visibility::Hidden ? m_visibility : current_visibility, false);
+	m_gui_settings->SetValue(gui::gs_visibility, gui::visibility_to_string(current_visibility == Visibility::Hidden ? m_visibility : current_visibility), false);
 	m_gui_settings->SetValue(gui::gs_geometry, geometry(), true);
 
 	if (!g_progr_text)
@@ -709,10 +723,10 @@ void gs_frame::show()
 		{
 			setVisibility(FullScreen);
 		}
-		else if (const QVariant var = m_gui_settings->GetValue(gui::gs_visibility); var.canConvert<Visibility>())
+		else if (const QVariant var = m_gui_settings->GetValue(gui::gs_visibility); var.canConvert<QString>() && !m_gui_settings->GetValue(gui::gs_resize).toBool())
 		{
 			// Restore saved visibility from last time. Make sure not to hide the window, or the user can't access it anymore.
-			if (const Visibility visibility = var.value<Visibility>(); visibility != Visibility::Hidden)
+			if (const Visibility visibility = gui::string_to_visibility(var.value<QString>()); visibility != Visibility::Hidden)
 			{
 				setVisibility(visibility);
 			}
@@ -792,7 +806,7 @@ f64 gs_frame::client_display_rate()
 {
 	f64 rate = 20.; // Minimum is 20
 
-	Emu.BlockingCallFromMainThread([this, &rate]()
+	Emu.BlockingCallFromMainThread([&rate]()
 	{
 		const QList<QScreen*> screens = QGuiApplication::screens();
 
@@ -821,17 +835,7 @@ void gs_frame::flip(draw_context_t /*context*/, bool /*skip_frame*/)
 
 	if (fps_t.GetElapsedTimeInSec() >= 0.5)
 	{
-		std::string new_title = Emu.GetFormattedTitle(m_frames / fps_t.GetElapsedTimeInSec());
-
-		if (new_title != m_window_title)
-		{
-			m_window_title = new_title;
-
-			Emu.CallFromMainThread([this, title = std::move(new_title)]()
-			{
-				setTitle(QString::fromStdString(title));
-			});
-		}
+		update_title(m_frames / fps_t.GetElapsedTimeInSec());
 
 		m_frames = 0;
 		fps_t.Start();
@@ -1040,7 +1044,7 @@ void gs_frame::take_screenshot(std::vector<u8>&& data, u32 sshot_width, u32 ssho
 
 					if (new_size.width != static_cast<u32>(img.width()) || new_size.height != static_cast<u32>(img.height()))
 					{
-						const int scale = rsx::get_resolution_scale_percent();
+						const int scale = rsx::get_current_renderer()->resolution_scaling_config.scale_percent;
 						const int x = (scale * manager.overlay_offset_x) / 100;
 						const int y = (scale * manager.overlay_offset_y) / 100;
 						const int width = (scale * overlay_img.width()) / 100;
@@ -1119,6 +1123,21 @@ void gs_frame::take_screenshot(std::vector<u8>&& data, u32 sshot_width, u32 ssho
 		},
 		std::move(data))
 		.detach();
+}
+
+void gs_frame::update_title(double fps)
+{
+	std::string new_title = Emu.GetFormattedTitle(fps);
+
+	if (new_title != m_window_title)
+	{
+		m_window_title = new_title;
+
+		Emu.CallFromMainThread([this, title = std::move(new_title)]()
+		{
+			setTitle(QString::fromStdString(title));
+		});
+	}
 }
 
 void gs_frame::mouseDoubleClickEvent(QMouseEvent* ev)

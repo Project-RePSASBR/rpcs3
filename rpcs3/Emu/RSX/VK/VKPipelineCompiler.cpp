@@ -34,16 +34,22 @@ namespace vk
 		{
 			for (auto&& job : m_work_queue.pop_all())
 			{
-				if (job.is_graphics_job)
-				{
-					auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags);
-					job.callback_func(compiled);
-				}
-				else
+				if (!job.is_graphics_job)
 				{
 					auto compiled = int_compile_compute_pipe(job.compute_data, job.inputs, job.flags);
 					job.callback_func(compiled);
+					continue;
 				}
+
+				if (job.create_info_func)
+				{
+					auto compiled = int_compile_graphics_pipe(job.create_info_func, job.inputs, {}, job.flags);
+					job.callback_func(compiled);
+					continue;
+				}
+
+				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags);
+				job.callback_func(compiled);
 			}
 
 			thread_ctrl::wait_on(m_work_queue);
@@ -153,11 +159,22 @@ namespace vk
 		VkPipelineColorBlendStateCreateInfo cs = create_info.state.cs;
 		cs.pAttachments = create_info.state.att_state;
 
+		VkPipelineRasterizationStateCreateInfo rs = create_info.state.rs;
+		VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking_vertex_state{};
+		if (flags & USE_LAST_PROVOKING_VERTEX)
+		{
+			ensure(m_device->get_provoking_vertex_last_support());
+			provoking_vertex_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT;
+			provoking_vertex_state.pNext = rs.pNext;
+			provoking_vertex_state.provokingVertexMode = VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+			rs.pNext = &provoking_vertex_state;
+		}
+
 		VkGraphicsPipelineCreateInfo info = {};
 		info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		info.pVertexInputState = &vi;
 		info.pInputAssemblyState = &create_info.state.ia;
-		info.pRasterizationState = &create_info.state.rs;
+		info.pRasterizationState = &rs;
 		info.pColorBlendState = &cs;
 		info.pMultisampleState = pmss;
 		info.pViewportState = &vp;
@@ -171,6 +188,16 @@ namespace vk
 		info.renderPass = vk::get_renderpass(*m_device, create_info.renderpass_key);
 
 		return int_compile_graphics_pipe(info, vs_inputs, fs_inputs, flags);
+	}
+
+	std::unique_ptr<glsl::program> pipe_compiler::int_compile_graphics_pipe(
+		graphics_pipe_create_callback_t pipe_info_create_fn,
+		const std::vector<glsl::program_input>& vs_inputs,
+		const std::vector<glsl::program_input>& fs_inputs,
+		op_flags flags)
+	{
+		VkGraphicsPipelineCreateInfo create_info = pipe_info_create_fn();
+		return int_compile_graphics_pipe(create_info, vs_inputs, fs_inputs, flags);
 	}
 
 	std::unique_ptr<glsl::program> pipe_compiler::compile(
@@ -194,7 +221,7 @@ namespace vk
 		const std::vector<glsl::program_input>& fs_inputs)
 	{
 		// It is very inefficient to defer this as all pointers need to be saved
-		ensure(flags & COMPILE_INLINE);
+		ensure(flags & COMPILE_INLINE, "Asynchronous compilation is not allowed for raw graphics pipeline input");
 		return int_compile_graphics_pipe(create_info, vs_inputs, fs_inputs, flags);
 	}
 
@@ -216,13 +243,39 @@ namespace vk
 		return {};
 	}
 
+	std::unique_ptr<glsl::program> pipe_compiler::compile(
+		graphics_pipe_create_callback_t get_create_info,
+		op_flags flags, callback_t callback,
+		const std::vector<glsl::program_input>& vs_inputs,
+		const std::vector<glsl::program_input>& fs_inputs)
+	{
+		if (flags & COMPILE_INLINE)
+		{
+			return int_compile_graphics_pipe(get_create_info, vs_inputs, fs_inputs, flags);
+		}
+
+		m_work_queue.push(get_create_info, vs_inputs, fs_inputs, flags, callback);
+		return {};
+	}
+
 	void initialize_pipe_compiler(int num_worker_threads)
 	{
 		if (num_worker_threads == 0)
 		{
-			// Select optimal number of compiler threads
+			// Select a conservative but modern default for async pipeline compilation.
+			// Older heuristics topped out too early on high-core CPUs and left large
+			// shader bursts queued longer than necessary.
 			const auto hw_threads = utils::get_thread_count();
-			if (hw_threads > 12)
+
+			if (hw_threads >= 24)
+			{
+				num_worker_threads = 12;
+			}
+			else if (hw_threads >= 16)
+			{
+				num_worker_threads = 8;
+			}
+			else if (hw_threads > 12)
 			{
 				num_worker_threads = 6;
 			}
@@ -238,6 +291,9 @@ namespace vk
 			{
 				num_worker_threads = 1;
 			}
+
+			rsx_log.notice("Async pipeline compiler auto-selected %d worker(s) for %u host thread(s).",
+				num_worker_threads, hw_threads);
 		}
 
 		ensure(num_worker_threads >= 1);

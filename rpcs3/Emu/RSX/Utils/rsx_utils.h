@@ -1,14 +1,9 @@
 #pragma once
 
-#include "../system_config.h"
+#include "../../system_config.h"
 #include "Utilities/address_range.h"
 #include "Utilities/geometry.h"
-#include "gcm_enums.h"
-
-extern "C"
-{
-#include <libavutil/pixfmt.h>
-}
+#include "../gcm_enums.h"
 
 #define RSX_SURFACE_DIMENSION_IGNORED 1
 
@@ -37,7 +32,38 @@ namespace rsx
 		fatal
 	};
 
-	//Base for resources with reference counting
+	namespace limits
+	{
+		enum
+		{
+			fragment_textures_count = 16,
+			vertex_textures_count = 4,
+			vertex_count = 16,
+			fragment_count = 32,
+			tiles_count = 15,
+			zculls_count = 8,
+			color_buffers_count = 4
+		};
+	}
+
+	namespace constants
+	{
+		constexpr std::array<const char*, 16> fragment_texture_names =
+		{
+			"tex0", "tex1", "tex2", "tex3", "tex4", "tex5", "tex6", "tex7",
+			"tex8", "tex9", "tex10", "tex11", "tex12", "tex13", "tex14", "tex15",
+		};
+
+		constexpr std::array<const char*, 4> vertex_texture_names =
+		{
+			"vtex0", "vtex1", "vtex2", "vtex3",
+		};
+
+		// Local RSX memory base (known as constant)
+		constexpr u32 local_mem_base = 0xC0000000;
+	}
+
+	// Base for resources with reference counting
 	class ref_counted
 	{
 	protected:
@@ -72,37 +98,6 @@ namespace rsx
 			return idle_time++;
 		}
 	};
-
-	namespace limits
-	{
-		enum
-		{
-			fragment_textures_count = 16,
-			vertex_textures_count = 4,
-			vertex_count = 16,
-			fragment_count = 32,
-			tiles_count = 15,
-			zculls_count = 8,
-			color_buffers_count = 4
-		};
-	}
-
-	namespace constants
-	{
-		constexpr std::array<const char*, 16> fragment_texture_names =
-		{
-			"tex0", "tex1", "tex2", "tex3", "tex4", "tex5", "tex6", "tex7",
-			"tex8", "tex9", "tex10", "tex11", "tex12", "tex13", "tex14", "tex15",
-		};
-
-		constexpr std::array<const char*, 4> vertex_texture_names =
-		{
-			"vtex0", "vtex1", "vtex2", "vtex3",
-		};
-
-		// Local RSX memory base (known as constant)
-		constexpr u32 local_mem_base = 0xC0000000;
-	}
 
 	/**
 	* Holds information about a framebuffer
@@ -214,44 +209,19 @@ namespace rsx
 		bool swizzled;
 	};
 
-	template <typename T>
-	void pad_texture(const void* input_pixels, void* output_pixels, u16 input_width, u16 input_height, u16 output_width, u16 /*output_height*/)
+	struct surface_scaling_config_t
 	{
-		const T *src = static_cast<const T*>(input_pixels);
-		T *dst = static_cast<T*>(output_pixels);
+		u16 scale_percent = 100;
+		u16 min_scalable_dimension = 0;
 
-		for (u16 h = 0; h < input_height; ++h)
+		f32 scale_factor() const { return scale_percent * 0.01f; }
+
+		bool operator == (const surface_scaling_config_t& that) const
 		{
-			const u32 padded_pos = h * output_width;
-			const u32 pos = h * input_width;
-			for (u16 w = 0; w < input_width; ++w)
-			{
-				dst[padded_pos + w] = src[pos + w];
-			}
+			return this->scale_percent == that.scale_percent &&
+				this->min_scalable_dimension == that.min_scalable_dimension;
 		}
-	}
-
-	static constexpr u32 floor_log2(u32 value)
-	{
-		return value <= 1 ? 0 : std::countl_zero(value) ^ 31;
-	}
-
-	static constexpr u32 ceil_log2(u32 value)
-	{
-		return floor_log2(value) + u32{!!(value & (value - 1))};
-	}
-
-	static constexpr u32 next_pow2(u32 x)
-	{
-		if (x <= 2) return x;
-
-		return static_cast<u32>((1ULL << 32) >> std::countl_zero(x - 1));
-	}
-
-	static inline bool fcmp(float a, float b, float epsilon = 0.000001f)
-	{
-		return fabsf(a - b) < epsilon;
-	}
+	};
 
 	// Returns an ever-increasing tag value
 	static inline u64 get_shared_tag()
@@ -267,190 +237,6 @@ namespace rsx
 			CELL_GCM_LOCATION_LOCAL :
 			CELL_GCM_LOCATION_MAIN;
 	}
-
-	// General purpose alignment without power-of-2 constraint
-	template <typename T, typename U>
-	static inline T align2(T value, U alignment)
-	{
-		return ((value + alignment - 1) / alignment) * alignment;
-	}
-
-	// General purpose downward alignment without power-of-2 constraint
-	template <typename T, typename U>
-	static inline T align_down2(T value, U alignment)
-	{
-		return (value / alignment) * alignment;
-	}
-
-	// Copy memory in inverse direction from source
-	// Used to scale negatively x axis while transfering image data
-	template <typename Ts = u8, typename Td = Ts>
-	static void memcpy_r(void* dst, void* src, usz size)
-	{
-		for (u32 i = 0; i < size; i++)
-		{
-			*(static_cast<Td*>(dst) + i) = *(static_cast<Ts*>(src) - i);
-		}
-	}
-
-	// Returns interleaved bits of X|Y|Z used as Z-order curve indices
-	static inline u32 calculate_z_index(u32 x, u32 y, u32 z, u32 log2_width, u32 log2_height, u32 log2_depth)
-	{
-		AUDIT(x < (1u << log2_width) && y < (1u << log2_height) && z < (1u << log2_depth));
-
-		// offset = X' | Y' | Z' which are x,y,z bits interleaved
-		u32 offset = 0;
-		u32 shift_count = 0;
-		do
-		{
-			if (log2_width)
-			{
-				offset |= (x & 0x1) << shift_count++;
-				x >>= 1;
-				log2_width--;
-			}
-
-			if (log2_height)
-			{
-				offset |= (y & 0x1) << shift_count++;
-				y >>= 1;
-				log2_height--;
-			}
-
-			if (log2_depth)
-			{
-				offset |= (z & 0x1) << shift_count++;
-				z >>= 1;
-				log2_depth--;
-			}
-		}
-		while (x | y | z);
-
-		return offset;
-	}
-
-	/*   Note: What the ps3 calls swizzling in this case is actually z-ordering / morton ordering of pixels
-	*       - Input can be swizzled or linear, bool flag handles conversion to and from
-	*       - It will handle any width and height that are a power of 2, square or non square
-	*    Restriction: It has mixed results if the height or width is not a power of 2
-	*    Restriction: Only works with 2D surfaces
-	*/
-	template <typename T, bool input_is_swizzled>
-	void convert_linear_swizzle(const void* input_pixels, void* output_pixels, u16 width, u16 height, u32 pitch)
-	{
-		const u32 log2width = ceil_log2(width);
-		const u32 log2height = ceil_log2(height);
-
-		// Max mask possible for square texture
-		u32 x_mask = 0x55555555;
-		u32 y_mask = 0xAAAAAAAA;
-
-		// We have to limit the masks to the lower of the two dimensions to allow for non-square textures
-		u32 limit_mask = (log2width < log2height) ? log2width : log2height;
-		// double the limit mask to account for bits in both x and y
-		limit_mask = 1 << (limit_mask << 1);
-
-		//x_mask, bits above limit are 1's for x-carry
-		x_mask = (x_mask | ~(limit_mask - 1));
-		//y_mask. bits above limit are 0'd, as we use a different method for y-carry over
-		y_mask = (y_mask & (limit_mask - 1));
-
-		u32 offs_y = 0;
-		u32 offs_x = 0;
-		u32 offs_x0 = 0; //total y-carry offset for x
-		const u32 y_incr = limit_mask;
-
-		// NOTE: The swizzled area is always a POT region and we must scan all of it to fill in the linear.
-		// It is assumed that there is no padding on the linear side for simplicity - backend upload/download will crop as needed.
-		// Remember, in cases of swizzling (and also tiled addressing) it is possible for tiled pixels to fall outside of their linear memory region.
-		const u32 pitch_in_blocks = pitch / sizeof(T);
-		u32 row_offset = 0;
-
-		if constexpr (!input_is_swizzled)
-		{
-			for (int y = 0; y < height; ++y, row_offset += pitch_in_blocks)
-			{
-				auto src = static_cast<const T*>(input_pixels) + row_offset;
-				auto dst = static_cast<T*>(output_pixels) + offs_y;
-				offs_x = offs_x0;
-
-				for (int x = 0; x < width; ++x)
-				{
-					dst[offs_x] = src[x];
-					offs_x = (offs_x - x_mask) & x_mask;
-				}
-
-				offs_y = (offs_y - y_mask) & y_mask;
-
-				if (offs_y == 0)
-				{
-					offs_x0 += y_incr;
-				}
-			}
-		}
-		else
-		{
-			for (int y = 0; y < height; ++y, row_offset += pitch_in_blocks)
-			{
-				auto src = static_cast<const T*>(input_pixels) + offs_y;
-				auto dst = static_cast<T*>(output_pixels) + row_offset;
-				offs_x = offs_x0;
-
-				for (int x = 0; x < width; ++x)
-				{
-					dst[x] = src[offs_x];
-					offs_x = (offs_x - x_mask) & x_mask;
-				}
-
-				offs_y = (offs_y - y_mask) & y_mask;
-
-				if (offs_y == 0)
-				{
-					offs_x0 += y_incr;
-				}
-			}
-		}
-	}
-
-	/**
-	 * Write swizzled data to linear memory with support for 3 dimensions
-	 * Z ordering is done in all 3 planes independently with a unit being a 2x2 block per-plane
-	 * A unit in 3d textures is a group of 2x2x2 texels advancing towards depth in units of 2x2x1 blocks
-	 * i.e 32 texels per "unit"
-	 */
-	template <typename T>
-	void convert_linear_swizzle_3d(const void* input_pixels, void* output_pixels, u16 width, u16 height, u16 depth)
-	{
-		if (depth == 1)
-		{
-			convert_linear_swizzle<T, true>(input_pixels, output_pixels, width, height, width * sizeof(T));
-			return;
-		}
-
-		auto src = static_cast<const T*>(input_pixels);
-		auto dst = static_cast<T*>(output_pixels);
-
-		const u32 log2_w = ceil_log2(width);
-		const u32 log2_h = ceil_log2(height);
-		const u32 log2_d = ceil_log2(depth);
-
-		for (u32 z = 0; z < depth; ++z)
-		{
-			for (u32 y = 0; y < height; ++y)
-			{
-				for (u32 x = 0; x < width; ++x)
-				{
-					*dst++ = src[calculate_z_index(x, y, z, log2_w, log2_h, log2_d)];
-				}
-			}
-		}
-	}
-
-	void convert_scale_image(u8 *dst, AVPixelFormat dst_format, int dst_width, int dst_height, int dst_pitch,
-		const u8 *src, AVPixelFormat src_format, int src_width, int src_height, int src_pitch, int src_slice_h, bool bilinear);
-
-	void clip_image(u8 *dst, const u8 *src, int clip_x, int clip_y, int clip_w, int clip_h, int bpp, int src_pitch, int dst_pitch);
-	void clip_image_may_overlap(u8 *dst, const u8 *src, int clip_x, int clip_y, int clip_w, int clip_h, int bpp, int src_pitch, int dst_pitch, u8* buffer);
 
 	std::array<float, 4> get_constant_blend_colors();
 
@@ -575,28 +361,23 @@ namespace rsx
 		}
 	}
 
-	static inline f32 get_resolution_scale()
-	{
-		return g_cfg.video.strict_rendering_mode ? 1.f : (g_cfg.video.resolution_scale_percent / 100.f);
-	}
-
-	static inline int get_resolution_scale_percent()
-	{
-		return g_cfg.video.strict_rendering_mode ? 100 : g_cfg.video.resolution_scale_percent;
-	}
-
 	template <bool clamp = false>
-	static inline const std::pair<u16, u16> apply_resolution_scale(u16 width, u16 height, u16 ref_width = 0, u16 ref_height = 0)
+	static inline const std::pair<u16, u16> apply_resolution_scale(
+		const surface_scaling_config_t& config,
+		u16 width,
+		u16 height,
+		u16 ref_width = 0,
+		u16 ref_height = 0)
 	{
 		ref_width = (ref_width) ? ref_width : width;
 		ref_height = (ref_height) ? ref_height : height;
 		const u16 ref = std::max(ref_width, ref_height);
 
-		if (ref > g_cfg.video.min_scalable_dimension)
+		if (ref > config.min_scalable_dimension)
 		{
 			// Upscale both width and height
-			width = (get_resolution_scale_percent() * width) / 100;
-			height = (get_resolution_scale_percent() * height) / 100;
+			width = (config.scale_percent * width) / 100;
+			height = (config.scale_percent * height) / 100;
 
 			if constexpr (clamp)
 			{
@@ -609,11 +390,14 @@ namespace rsx
 	}
 
 	template <bool clamp = false>
-	static inline const std::pair<u16, u16> apply_inverse_resolution_scale(u16 width, u16 height)
+	static inline const std::pair<u16, u16> apply_inverse_resolution_scale(
+		const surface_scaling_config_t& config,
+		u16 width,
+		u16 height)
 	{
 		// Inverse scale
-		auto width_ = (width * 100) / get_resolution_scale_percent();
-		auto height_ = (height * 100) / get_resolution_scale_percent();
+		auto width_ = (width * 100) / config.scale_percent;
+		auto height_ = (height * 100) / config.scale_percent;
 
 		if constexpr (clamp)
 		{
@@ -621,7 +405,7 @@ namespace rsx
 			height_ = std::max<u16>(height_, 1);
 		}
 
-		if (std::max(width_, height_) > g_cfg.video.min_scalable_dimension)
+		if (std::max(width_, height_) > config.min_scalable_dimension)
 		{
 			return { width_, height_ };
 		}

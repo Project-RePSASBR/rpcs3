@@ -259,6 +259,10 @@ rsx_debugger::rsx_debugger(std::shared_ptr<gui_settings> gui_settings, QWidget* 
 	for (u32 i = 0; i < frame_debug.command_queue.size(); i++)
 		m_list_captured_frame->insertRow(i);
 
+	// Fill the draw calls
+	for (u32 i = 0; i < frame_debug.draw_calls.size(); i++)
+		m_list_captured_draw_calls->insertRow(i);
+
 	restoreGeometry(m_gui_settings->GetValue(gui::rsx_geometry).toByteArray());
 
 	// Check for updates every ~100 ms
@@ -795,13 +799,22 @@ void rsx_debugger::GetBuffers() const
 		{
 			for (u32 y = 0; y < height; y++)
 			{
+				u8* line = buffer + y * pitch * 2;
+
 				for (u32 x = 0; x < std::max(pitch, 1u) - 1; x += 2)
 				{
-					const usz line_start = y * pitch;
+					const u32 rev_x = pitch - 2 - x;
 
-					std::memcpy(buffer + line_start * 2 + x * 2 + 1, buffer + line_start * 2 + x, 2);
-					buffer[line_start * 2 + x * 2 + 0] = 0;
-					buffer[line_start * 2 + x * 2 + 3] = 0xff;
+					const uint8_t* src = line + rev_x;
+					uint8_t* dst = line + rev_x * 2;
+
+					const uint8_t g = src[0];
+					const uint8_t b = src[1];
+
+					dst[0] = 0;
+					dst[1] = g;
+					dst[2] = b;
+					dst[3] = 0xff;
 				}
 			}
 

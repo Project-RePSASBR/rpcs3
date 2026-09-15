@@ -21,21 +21,19 @@ headless_application::headless_application(int& argc, char** argv) : QCoreApplic
 {
 }
 
-bool headless_application::Init()
+void headless_application::Init()
 {
-	// Force init the emulator
-	InitializeEmulator(m_active_user.empty() ? "00000001" : m_active_user, false);
-
 	// Create callbacks from the emulator, which reference the handlers.
 	InitializeCallbacks();
+
+	// Force init the emulator
+	InitializeEmulator(m_active_user.empty() ? "00000001" : m_active_user, false, true);
 
 	// Create connects to propagate events throughout Gui.
 	InitializeConnects();
 
 	// As per Qt recommendations to avoid conflicts for POSIX functions
 	std::setlocale(LC_NUMERIC, "C");
-
-	return true;
 }
 
 void headless_application::InitializeConnects() const
@@ -49,7 +47,7 @@ void headless_application::InitializeCallbacks()
 {
 	EmuCallbacks callbacks = CreateCallbacks();
 
-	callbacks.try_to_quit = [this](bool force_quit, std::function<void()> on_exit) -> bool
+	callbacks.try_to_quit = [](bool force_quit, std::function<void()> on_exit) -> bool
 	{
 		if (force_quit)
 		{
@@ -58,7 +56,7 @@ void headless_application::InitializeCallbacks()
 				on_exit();
 			}
 
-			sys_log.notice("Quitting headless application");
+			sys_log.notice("Quitting headless application (force_quit=%d)", force_quit);
 			quit();
 			return true;
 		}

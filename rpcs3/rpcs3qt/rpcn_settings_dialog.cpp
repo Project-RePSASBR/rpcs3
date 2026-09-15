@@ -751,7 +751,7 @@ rpcn_account_edit_dialog::rpcn_account_edit_dialog(QWidget* parent)
 
 	QPushButton* btn_resendtoken     = new QPushButton(tr("Resend Token"), this);
 	QPushButton* btn_change_password = new QPushButton(tr("Change Password"), this);
-	QPushButton* btn_delete_account = new QPushButton(tr("Delete Account"), this);
+	QPushButton* btn_delete_account  = new QPushButton(tr("Delete Account"), this);
 	QPushButton* btn_save            = new QPushButton(tr("Save"), this);
 
 	vbox_labels->addWidget(lbl_username);
@@ -1347,10 +1347,13 @@ rpcn_friends_dialog::rpcn_friends_dialog(QWidget* parent)
 
 rpcn_friends_dialog::~rpcn_friends_dialog()
 {
-	m_rpcn->remove_friend_cb(friend_callback, this);
+	if (m_rpcn)
+	{
+		m_rpcn->remove_friend_cb(friend_callback, this);
+	}
 }
 
-bool rpcn_friends_dialog::add_friend_with_error_dialog(const std::string& friend_username)
+bool rpcn_friends_dialog::add_friend_with_error_dialog(std::string_view friend_username)
 {
 	QString err_msg;
 	const auto opt_error = m_rpcn->add_friend(friend_username);

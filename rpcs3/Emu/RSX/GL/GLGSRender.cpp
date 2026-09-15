@@ -49,6 +49,9 @@ GLGSRender::GLGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 	backend_config.supports_multidraw = true;
 	backend_config.supports_normalized_barycentrics = true;
+	backend_config.supports_hw_instanced_rendering = true;
+	// OpenGL 3.2+ defaults to GL_LAST_VERTEX_CONVENTION.
+	backend_config.supports_last_provoking_vertex = true;
 
 	if (g_cfg.video.antialiasing_level != msaa_level::none)
 	{
@@ -61,6 +64,9 @@ GLGSRender::GLGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 GLGSRender::~GLGSRender()
 {
+	// Force-release ZCULL-ctrl since it is a pointer to self.
+	zcull_ctrl.release();
+
 	if (m_frame)
 	{
 		m_frame->reset();
@@ -73,6 +79,7 @@ void GLGSRender::set_viewport()
 {
 	// NOTE: scale offset matrix already contains the viewport transformation
 	const auto [clip_width, clip_height] = rsx::apply_resolution_scale<true>(
+		resolution_scaling_config,
 		rsx::method_registers.surface_clip_width(), rsx::method_registers.surface_clip_height());
 
 	glViewport(0, 0, clip_width, clip_height);
@@ -138,8 +145,7 @@ void GLGSRender::on_init_thread()
 	gl::init();
 	gl::set_command_context(gl_state);
 
-	// Enable adaptive vsync if vsync is requested
-	gl::set_swapinterval(g_cfg.video.vsync ? -1 : 0);
+	update_swap_interval();
 
 	if (g_cfg.video.debug_output)
 		gl::enable_debugging();
@@ -147,6 +153,9 @@ void GLGSRender::on_init_thread()
 	rsx_log.success("GL RENDERER: %s (%s)", reinterpret_cast<const char*>(glGetString(GL_RENDERER)), reinterpret_cast<const char*>(glGetString(GL_VENDOR)));
 	rsx_log.success("GL VERSION: %s", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 	rsx_log.success("GLSL VERSION: %s", reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
+
+	// Update frame title after GL was initialized in order to show the proper GPU
+	m_frame->update_title();
 
 	const auto& gl_caps = gl::get_driver_caps();
 
@@ -174,6 +183,12 @@ void GLGSRender::on_init_thread()
 	if (!gl_caps.ARB_texture_barrier_supported && !gl_caps.NV_texture_barrier_supported && !g_cfg.video.strict_rendering_mode)
 	{
 		rsx_log.warning("Texture barriers are not supported by your GPU. Feedback loops will have undefined results.");
+	}
+
+	if (!gl_caps.ARB_shader_storage_buffer_object_supported)
+	{
+		rsx_log.warning("[PERFORMANCE WARNING] SSBOs are not supported by your GPU. Some functionality such as hardware instancing will be unavailable.");
+		backend_config.supports_hw_instanced_rendering = false;
 	}
 
 	if (!gl_caps.ARB_bindless_texture_supported)
@@ -249,22 +264,23 @@ void GLGSRender::on_init_thread()
 	// Fallback null texture instead of relying on texture0
 	{
 		std::array<u32, 8> pixeldata = { 0, 0, 0, 0, 0, 0, 0, 0 };
+		const rsx::io_buffer src_buf = std::span<u32>(pixeldata);
 
 		// 1D
-		auto tex1D = std::make_unique<gl::texture>(GL_TEXTURE_1D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
-		tex1D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
+		auto tex1D = std::make_unique<gl::viewable_image>(GL_TEXTURE_1D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
+		tex1D->copy_from(src_buf, gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
 
 		// 2D
-		auto tex2D = std::make_unique<gl::texture>(GL_TEXTURE_2D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
-		tex2D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
+		auto tex2D = std::make_unique<gl::viewable_image>(GL_TEXTURE_2D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
+		tex2D->copy_from(src_buf, gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
 
 		// 3D
-		auto tex3D = std::make_unique<gl::texture>(GL_TEXTURE_3D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
-		tex3D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
+		auto tex3D = std::make_unique<gl::viewable_image>(GL_TEXTURE_3D, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
+		tex3D->copy_from(src_buf, gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
 
 		// CUBE
-		auto texCUBE = std::make_unique<gl::texture>(GL_TEXTURE_CUBE_MAP, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
-		texCUBE->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
+		auto texCUBE = std::make_unique<gl::viewable_image>(GL_TEXTURE_CUBE_MAP, 1, 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
+		texCUBE->copy_from(src_buf, gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
 
 		m_null_textures[GL_TEXTURE_1D] = std::move(tex1D);
 		m_null_textures[GL_TEXTURE_2D] = std::move(tex2D);
@@ -325,14 +341,18 @@ void GLGSRender::on_init_thread()
 	m_vertex_layout_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
 	m_raster_env_ring_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
 	m_scratch_ring_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
-	m_instancing_ring_buffer->create(gl::buffer::target::ssbo, 128 * 0x100000);
+
+	if (backend_config.supports_hw_instanced_rendering)
+	{
+		ensure(gl_caps.ARB_shader_storage_buffer_object_supported);
+		m_instancing_ring_buffer->create(gl::buffer::target::ssbo, 128 * 0x100000);
+	}
 
 	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
 	{
+		ensure(gl_caps.ARB_shader_storage_buffer_object_supported);
 		m_vertex_instructions_buffer->create(gl::buffer::target::ssbo, 16 * 0x100000);
 		m_fragment_instructions_buffer->create(gl::buffer::target::ssbo, 16 * 0x100000);
-
-		m_shader_interpreter.create();
 	}
 
 	if (gl_caps.vendor_AMD)
@@ -397,6 +417,7 @@ void GLGSRender::on_init_thread()
 	m_ui_renderer.create();
 	m_video_output_pass.create();
 
+	gl::init_global_texture_resources();
 	m_gl_texture_cache.initialize();
 
 	m_prog_buffer.initialize
@@ -408,20 +429,31 @@ void GLGSRender::on_init_thread()
 		}
 	);
 
-	if (!m_overlay_manager)
+	if (shadermode == shader_mode::async_with_interpreter ||
+		shadermode == shader_mode::interpreter_only)
 	{
-		m_frame->hide();
-		m_shaders_cache->load(nullptr);
-		m_frame->show();
+		std::unique_ptr<rsx::shader_loading_dialog> dlg = m_overlay_manager
+			? std::make_unique<rsx::shader_loading_dialog_native>(this)
+			: std::make_unique<rsx::shader_loading_dialog>();
+		m_shader_interpreter.create(dlg.get());
+		dlg->close();
 	}
-	else
-	{
-		rsx::shader_loading_dialog_native dlg(this);
 
-		m_shaders_cache->load(&dlg);
+	if (shadermode != shader_mode::interpreter_only)
+	{
+		if (!m_overlay_manager)
+		{
+			m_frame->hide();
+			m_shaders_cache->load(nullptr);
+			m_frame->show();
+		}
+		else
+		{
+			rsx::shader_loading_dialog_native dlg(this);
+			m_shaders_cache->load(&dlg);
+		}
 	}
 }
-
 
 void GLGSRender::on_exit()
 {
@@ -576,6 +608,33 @@ void GLGSRender::on_exit()
 	zcull_ctrl.release();
 
 	gl::set_primary_context_thread(false);
+}
+
+void GLGSRender::update_swap_interval()
+{
+	const vsync_mode current_mode = g_cfg.video.vsync;
+	if (current_mode == m_vsync_mode)
+	{
+		return;
+	}
+
+	// Enable adaptive vsync if vsync is requested
+	int swap_interval = 0;
+	switch (current_mode)
+	{
+	default:
+	case vsync_mode::off:
+		break;
+	case vsync_mode::adaptive:
+		swap_interval = -1;
+		break;
+	case vsync_mode::full:
+		swap_interval = 1;
+		break;
+	}
+
+	gl::set_swapinterval(swap_interval);
+	m_vsync_mode = current_mode;
 }
 
 void GLGSRender::clear_surface(u32 arg)
@@ -881,7 +940,7 @@ void GLGSRender::load_program_env()
 	const bool update_fragment_texture_env = m_graphics_state & rsx::pipeline_state::fragment_texture_state_dirty;
 	const bool update_instruction_buffers = !!m_interpreter_state && m_shader_interpreter.is_interpreter(m_program);
 	const bool update_raster_env = REGS(m_ctx)->polygon_stipple_enabled() && (m_graphics_state & rsx::pipeline_state::polygon_stipple_pattern_dirty);
-	const bool update_instancing_data = REGS(m_ctx)->current_draw_clause.is_trivial_instanced_draw;
+	const bool update_instancing_data = backend_config.supports_hw_instanced_rendering && REGS(m_ctx)->current_draw_clause.is_trivial_instanced_draw;
 
 	if (manually_flush_ring_buffers)
 	{
@@ -908,7 +967,7 @@ void GLGSRender::load_program_env()
 		m_draw_processor.fill_scale_offset_data(buf, false);
 		m_draw_processor.fill_user_clip_data(buf + 64);
 		*(reinterpret_cast<u32*>(buf + 68)) = rsx::method_registers.transform_branch_bits();
-		*(reinterpret_cast<f32*>(buf + 72)) = rsx::method_registers.point_size() * rsx::get_resolution_scale();
+		*(reinterpret_cast<f32*>(buf + 72)) = rsx::method_registers.point_size() * resolution_scaling_config.scale_factor();
 		*(reinterpret_cast<f32*>(buf + 76)) = rsx::method_registers.clip_min();
 		*(reinterpret_cast<f32*>(buf + 80)) = rsx::method_registers.clip_max();
 
@@ -1027,7 +1086,7 @@ void GLGSRender::load_program_env()
 		if (m_interpreter_state & rsx::fragment_program_dirty)
 		{
 			// Attach fragment buffer data
-			const auto fp_block_length = current_fp_metadata.program_ucode_length + 80;
+			const auto fp_block_length = current_fp_metadata.program_ucode_length + 16;
 			auto fp_mapping = m_fragment_instructions_buffer->alloc_from_heap(fp_block_length, 16);
 			auto fp_buf = static_cast<u8*>(fp_mapping.first);
 
@@ -1035,11 +1094,9 @@ void GLGSRender::load_program_env()
 			const auto control_masks = reinterpret_cast<u32*>(fp_buf);
 			control_masks[0] = rsx::method_registers.shader_control();
 			control_masks[1] = current_fragment_program.texture_state.texture_dimensions;
+			control_masks[2] = current_fp_metadata.referenced_textures_mask;
 
-			// Bind textures
-			m_shader_interpreter.update_fragment_textures(fs_sampler_state, current_fp_metadata.referenced_textures_mask, reinterpret_cast<u32*>(fp_buf + 16));
-
-			std::memcpy(fp_buf + 80, current_fragment_program.get_data(), current_fragment_program.ucode_length);
+			std::memcpy(fp_buf + 16, current_fragment_program.get_data(), current_fragment_program.ucode_length);
 
 			m_fragment_instructions_buffer->bind_range(GL_INTERPRETER_FRAGMENT_BLOCK, fp_mapping.second, fp_block_length);
 			m_fragment_instructions_buffer->notify();
@@ -1271,11 +1328,11 @@ void GLGSRender::do_local_task(rsx::FIFO::state state)
 	{
 		std::lock_guard lock(queue_guard);
 
-		work_queue.remove_if([](auto &q) { return q.received; });
+		work_queue.remove_if([](auto &q) { return q.received.load(); });
 
 		for (auto& q : work_queue)
 		{
-			if (q.processed) continue;
+			if (q.processed.load()) continue;
 
 			gl::command_context cmd{ gl_state };
 			q.result = m_gl_texture_cache.flush_all(cmd, q.section_data);

@@ -44,6 +44,7 @@
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">MaxSpeed</Optimization>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">AL_LIBTYPE_STATIC;MINIUPNP_STATICLIB;HAVE_VULKAN;HAVE_SDL3;ZLIB_CONST;WOLFSSL_USER_SETTINGS;CURL_STATICLIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AL_LIBTYPE_STATIC;MINIUPNP_STATICLIB;HAVE_VULKAN;HAVE_SDL3;ZLIB_CONST;WOLFSSL_USER_SETTINGS;CURL_STATICLIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(EnableLibUsbWindowsHotplug)' == 'true'">LIBUSB_WINDOWS_HOTPLUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(AdditionalModuleDependencies)</AdditionalModuleDependencies>
       <AdditionalModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(AdditionalModuleDependencies)</AdditionalModuleDependencies>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/D "RPCS3_HAS_MEMORY_BREAKPOINTS" %(AdditionalOptions)</AdditionalOptions>
@@ -60,6 +61,7 @@
     </Lib>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\Utilities\stereo_config.cpp" />
     <ClCompile Include="..\Utilities\cheat_info.cpp" />
     <ClCompile Include="..\Utilities\date_time.cpp" />
     <ClCompile Include="..\Utilities\stack_trace.cpp" />
@@ -75,6 +77,7 @@
     </ClCompile>
     <ClCompile Include="Emu\cache_utils.cpp" />
     <ClCompile Include="Emu\Cell\ErrorCodes.cpp" />
+    <ClCompile Include="Emu\Cell\lv2\sys_bluetooth.cpp" />
     <ClCompile Include="Emu\Cell\lv2\sys_game.cpp" />
     <ClCompile Include="Emu\Cell\Modules\cellMusicSelectionContext.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libfs_utility_init.cpp" />
@@ -87,6 +90,7 @@
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="Emu\Io\GameTablet.cpp" />
+    <ClCompile Include="Emu\Io\gem_config.cpp" />
     <ClCompile Include="Emu\Io\GHLtar.cpp" />
     <ClCompile Include="Emu\Io\GunCon3.cpp" />
     <ClCompile Include="Emu\Io\midi_config_types.cpp" />
@@ -135,7 +139,9 @@
     <ClCompile Include="Emu\RSX\NV47\HW\nv308a.cpp" />
     <ClCompile Include="Emu\RSX\NV47\HW\nv406e.cpp" />
     <ClCompile Include="Emu\RSX\NV47\HW\nv4097.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_info.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\FriendsList\overlay_friends_list_dialog.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_icons.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_components.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_message_box.cpp" />
@@ -143,9 +149,16 @@
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_page.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_settings.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_savestate.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_sidebar_page.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_details.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_grid.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_main_menu.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\Network\overlay_recvmessage_dialog.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\Network\overlay_sendmessage_dialog.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_animated_icon.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\overlay_audio.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\overlay_checkbox.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_controls.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_cursor.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_debug_overlay.cpp" />
@@ -153,6 +166,9 @@
     <ClCompile Include="Emu\RSX\Overlays\overlay_media_list_dialog.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_osk_panel.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_compile_notification.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\overlay_select.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\overlay_slider.cpp" />
+    <ClCompile Include="Emu\RSX\Overlays\overlay_tabs.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_user_list_dialog.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_utils.cpp" />
     <ClCompile Include="Emu\RSX\Overlays\overlay_video.cpp" />
@@ -166,6 +182,7 @@
     <ClCompile Include="Emu\RSX\Program\Assembler\Passes\FP\RegisterDependencyPass.cpp" />
     <ClCompile Include="Emu\RSX\Program\ProgramStateCache.cpp" />
     <ClCompile Include="Emu\RSX\Program\program_util.cpp" />
+    <ClCompile Include="Emu\RSX\Program\ShaderInterpreter.cpp" />
     <ClCompile Include="Emu\RSX\Program\SPIRVCommon.cpp" />
     <ClCompile Include="Emu\RSX\RSXDisAsm.cpp" />
     <ClCompile Include="Emu\RSX\RSXZCULL.cpp" />
@@ -198,6 +215,7 @@
     </ClCompile>
     <ClCompile Include="Emu\vfs_config.cpp" />
     <ClCompile Include="Loader\disc.cpp" />
+    <ClCompile Include="Loader\content_validation.cpp" />
     <ClCompile Include="util\emu_utils.cpp" />
     <ClCompile Include="util\serialization_ext.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -420,9 +438,17 @@
     <ClCompile Include="Emu\Cell\Modules\cellWebBrowser.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libad_async.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libad_core.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libavcdec.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libdivx311dec.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libdivxdec.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libmedi.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libmixer.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libmvcdec.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libsjvtd.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libsmvd2.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libsmvd4.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libsnd3.cpp" />
+    <ClCompile Include="Emu\Cell\Modules\libsvc1d.cpp" />
     <ClCompile Include="Emu\Cell\Modules\libsynth2.cpp" />
     <ClCompile Include="Emu\Cell\Modules\sceNp.cpp" />
     <ClCompile Include="Emu\Cell\Modules\sceNp2.cpp" />
@@ -498,7 +524,7 @@
     <ClCompile Include="Emu\RSX\RSXFIFO.cpp" />
     <ClCompile Include="Emu\RSX\RSXOffload.cpp" />
     <ClCompile Include="Emu\RSX\rsx_methods.cpp" />
-    <ClCompile Include="Emu\RSX\rsx_utils.cpp" />
+    <ClCompile Include="Emu\RSX\Utils\rsx_utils.cpp" />
     <ClCompile Include="Crypto\aes.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -546,6 +572,7 @@
     <ClCompile Include="Loader\PUP.cpp" />
     <ClCompile Include="Loader\TAR.cpp" />
     <ClCompile Include="Loader\ISO.cpp" />
+    <ClCompile Include="Loader\iso_cache.cpp" />
     <ClCompile Include="Loader\mself.cpp" />
     <ClCompile Include="Loader\TROPUSR.cpp" />
     <ClCompile Include="Loader\TRP.cpp" />
@@ -558,6 +585,7 @@
   <ItemGroup>
     <ClInclude Include="..\3rdparty\stblib\stb\stb_image.h" />
     <ClInclude Include="..\Utilities\address_range.h" />
+    <ClInclude Include="..\Utilities\stereo_config.h" />
     <ClInclude Include="..\Utilities\cheat_info.h" />
     <ClInclude Include="..\Utilities\deferred_op.hpp" />
     <ClInclude Include="..\Utilities\simple_ringbuf.h" />
@@ -575,6 +603,7 @@
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClInclude>
     <ClInclude Include="Emu\cache_utils.hpp" />
+    <ClInclude Include="Emu\Cell\lv2\sys_bluetooth.h" />
     <ClInclude Include="Emu\Cell\lv2\sys_crypto_engine.h" />
     <ClInclude Include="Emu\Cell\lv2\sys_game.h" />
     <ClInclude Include="Emu\Cell\Modules\cellCrossController.h" />
@@ -590,6 +619,7 @@
     <ClInclude Include="Emu\CPU\Hypervisor.h" />
     <ClInclude Include="Emu\CPU\sse2neon.h" />
     <ClInclude Include="Emu\games_config.h" />
+    <ClInclude Include="Emu\game_enumeration.h" />
     <ClInclude Include="Emu\Io\Buzz.h" />
     <ClInclude Include="Emu\Io\buzz_config.h" />
     <ClInclude Include="Emu\Io\camera_config.h" />
@@ -655,10 +685,11 @@
     <ClInclude Include="Emu\NP\rpcn_config.h" />
     <ClInclude Include="Emu\NP\ip_address.h" />
     <ClInclude Include="Emu\perf_monitor.hpp" />
-    <ClInclude Include="Emu\RSX\color_utils.h" />
+    <ClInclude Include="Emu\RSX\Common\aligned_malloc.hpp" />
     <ClInclude Include="Emu\RSX\Common\bitfield.hpp" />
     <ClInclude Include="Emu\RSX\Common\buffer_stream.hpp" />
     <ClInclude Include="Emu\RSX\Common\reverse_ptr.hpp" />
+    <ClInclude Include="Emu\RSX\Common\texture_cache_blit_helpers.h" />
     <ClInclude Include="Emu\RSX\Common\tiled_dma_copy.hpp" />
     <ClInclude Include="Emu\RSX\Common\expected.hpp" />
     <ClInclude Include="Emu\RSX\Common\io_buffer.h" />
@@ -694,7 +725,9 @@
     <ClInclude Include="Emu\RSX\NV47\HW\nv47.h" />
     <ClInclude Include="Emu\RSX\NV47\HW\common.h" />
     <ClInclude Include="Emu\RSX\NV47\HW\nv47_sync.hpp" />
+    <ClInclude Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_info.h" />
     <ClInclude Include="Emu\RSX\Overlays\FriendsList\overlay_friends_list_dialog.h" />
+    <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_icons.h" />
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu.h" />
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_components.h" />
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_message_box.h" />
@@ -702,9 +735,17 @@
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_page.h" />
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_settings.h" />
     <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_savestate.h" />
+    <ClInclude Include="Emu\RSX\Overlays\HomeMenu\overlay_home_menu_sidebar_page.h" />
+    <ClInclude Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture.h" />
+    <ClInclude Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_details.h" />
+    <ClInclude Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_game_grid.h" />
+    <ClInclude Include="Emu\RSX\Overlays\BigPicture\overlay_big_picture_main_menu.h" />
     <ClInclude Include="Emu\RSX\Overlays\Network\overlay_recvmessage_dialog.h" />
     <ClInclude Include="Emu\RSX\Overlays\Network\overlay_sendmessage_dialog.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_animated_icon.h" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_arrow.h" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_audio.h" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_checkbox.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_cursor.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_debug_overlay.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_edit_text.hpp" />
@@ -713,6 +754,9 @@
     <ClInclude Include="Emu\RSX\Overlays\overlay_manager.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_media_list_dialog.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_progress_bar.hpp" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_select.h" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_slider.h" />
+    <ClInclude Include="Emu\RSX\Overlays\overlay_tabs.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_video.h" />
     <ClInclude Include="Emu\RSX\Overlays\Trophies\overlay_trophy_list_dialog.h" />
     <ClInclude Include="Emu\RSX\Program\Assembler\CFG.h" />
@@ -754,8 +798,11 @@
     <ClInclude Include="Emu\system_config_types.h" />
     <ClInclude Include="Emu\vfs_config.h" />
     <ClInclude Include="Loader\disc.h" />
+    <ClInclude Include="Loader\content_validation.h" />
+    <ClInclude Include="Loader\iso_cache.h" />
     <ClInclude Include="Loader\mself.hpp" />
     <ClInclude Include="util\atomic.hpp" />
+    <ClInclude Include="util\bit_set.hpp" />
     <ClInclude Include="util\bless.hpp" />
     <ClInclude Include="util\pair.hpp" />
     <ClInclude Include="util\tuple.hpp" />
@@ -929,6 +976,7 @@
     <ClInclude Include="Emu\Cell\Modules\cellSync.h" />
     <ClInclude Include="Emu\Cell\Modules\cellSync2.h" />
     <ClInclude Include="Emu\Cell\Modules\cellSysconf.h" />
+    <ClInclude Include="Emu\Cell\Modules\cellSysmodule.h" />
     <ClInclude Include="Emu\Cell\Modules\cellSysutil.h" />
     <ClInclude Include="Emu\Cell\Modules\cellSysutilAvc2.h" />
     <ClInclude Include="Emu\Cell\Modules\cellUsbd.h" />
@@ -938,8 +986,16 @@
     <ClInclude Include="Emu\Cell\Modules\cellVideoUpload.h" />
     <ClInclude Include="Emu\Cell\Modules\cellVpost.h" />
     <ClInclude Include="Emu\Cell\Modules\cellWebBrowser.h" />
+    <ClInclude Include="Emu\Cell\Modules\libavcdec.h" />
+    <ClInclude Include="Emu\Cell\Modules\libdivx311dec.h" />
+    <ClInclude Include="Emu\Cell\Modules\libdivxdec.h" />
     <ClInclude Include="Emu\Cell\Modules\libmixer.h" />
+    <ClInclude Include="Emu\Cell\Modules\libmvcdec.h" />
+    <ClInclude Include="Emu\Cell\Modules\libsjvtd.h" />
+    <ClInclude Include="Emu\Cell\Modules\libsmvd2.h" />
+    <ClInclude Include="Emu\Cell\Modules\libsmvd4.h" />
     <ClInclude Include="Emu\Cell\Modules\libsnd3.h" />
+    <ClInclude Include="Emu\Cell\Modules\libsvc1d.h" />
     <ClInclude Include="Emu\Cell\Modules\libsynth2.h" />
     <ClInclude Include="Emu\Cell\Modules\sceNp.h" />
     <ClInclude Include="Emu\Cell\Modules\sceNp2.h" />
@@ -1001,6 +1057,7 @@
     <ClInclude Include="Emu\Io\PadHandler.h" />
     <ClInclude Include="Emu\RSX\Program\CgBinaryProgram.h" />
     <ClInclude Include="Emu\RSX\Common\BufferUtils.h" />
+    <ClInclude Include="Emu\RSX\Common\BufferUtils_avx512.h" />
     <ClInclude Include="Emu\RSX\Program\FragmentProgramDecompiler.h" />
     <ClInclude Include="Emu\RSX\Common\ring_buffer_helper.h" />
     <ClInclude Include="Emu\RSX\Program\ShaderParam.h" />
@@ -1016,11 +1073,13 @@
     <ClInclude Include="Emu\RSX\Program\RSXVertexProgram.h" />
     <ClInclude Include="Emu\Memory\vm.h" />
     <ClInclude Include="Emu\Memory\vm_ptr.h" />
-    <ClInclude Include="Emu\Memory\vm_ref.h" />
     <ClInclude Include="Emu\Memory\vm_reservation.h" />
     <ClInclude Include="Emu\Memory\vm_var.h" />
     <ClInclude Include="Emu\RSX\rsx_methods.h" />
-    <ClInclude Include="Emu\RSX\rsx_utils.h" />
+    <ClInclude Include="Emu\RSX\Utils\algorithm.hpp" />
+    <ClInclude Include="Emu\RSX\Utils\color_utils.hpp" />
+    <ClInclude Include="Emu\RSX\Utils\image_utils.hpp" />
+    <ClInclude Include="Emu\RSX\Utils\rsx_utils.h" />
     <ClInclude Include="Emu\System.h" />
     <ClInclude Include="Emu\perf_meter.hpp" />
     <ClInclude Include="Emu\GDB.h" />

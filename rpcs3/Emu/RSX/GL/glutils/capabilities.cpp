@@ -2,6 +2,7 @@
 #include "capabilities.h"
 
 #include "Utilities/StrUtil.h"
+#include "Emu/system_config.h"
 
 #include <unordered_set>
 
@@ -42,6 +43,8 @@ namespace gl
 		{
 			all_extensions.emplace(reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i)));
 		}
+
+		RENDERDOC_debug = !!g_cfg.video.renderdoc_compatiblity;
 
 #define CHECK_EXTENSION_SUPPORT(extension_short_name)\
 	do {\
@@ -89,6 +92,8 @@ namespace gl
 		CHECK_EXTENSION_SUPPORT(ARB_shader_texture_image_samples);
 
 		CHECK_EXTENSION_SUPPORT(EXT_texture_compression_s3tc);
+
+		CHECK_EXTENSION_SUPPORT(ARB_shader_storage_buffer_object);
 
 #undef CHECK_EXTENSION_SUPPORT
 
@@ -161,5 +166,15 @@ namespace gl
 #endif
 
 		initialized = true;
+	}
+
+	const std::string get_device_name()
+	{
+		if (const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER)))
+		{
+			return renderer;
+		}
+
+		return "OpenGL GPU";
 	}
 }

@@ -1,7 +1,6 @@
 #include "stdafx.h"
 #include "vm_locking.h"
 #include "vm_ptr.h"
-#include "vm_ref.h"
 #include "vm_reservation.h"
 
 #include "Utilities/Thread.h"
@@ -31,7 +30,7 @@ namespace vm
 	{
 		for (u64 addr = reinterpret_cast<u64>(_addr) + 0x100000000; addr < 0x8000'0000'0000; addr += 0x100000000)
 		{
-			if (auto ptr = utils::memory_reserve(size, reinterpret_cast<void*>(addr), is_memory_mapping))
+			if (auto ptr = utils::memory_reserve(size, reinterpret_cast<void*>(addr), is_memory_mapping, false))
 			{
 				return static_cast<u8*>(ptr);
 			}
@@ -415,20 +414,6 @@ namespace vm
 		}
 	}
 
-	void passive_unlock(cpu_thread& cpu)
-	{
-		if (auto& ptr = g_tls_locked)
-		{
-			ptr->release(nullptr);
-			ptr = nullptr;
-
-			if (cpu.state & cpu_flag::memory)
-			{
-				cpu.state -= cpu_flag::memory;
-			}
-		}
-	}
-
 	bool temporary_unlock(cpu_thread& cpu) noexcept
 	{
 		bs_t<cpu_flag> add_state = cpu_flag::wait;
@@ -437,6 +422,8 @@ namespace vm
 		{
 			add_state += cpu_flag::memory;
 		}
+
+		g_tls_locked = nullptr;
 
 		if (add_state - cpu.state)
 		{
@@ -463,26 +450,33 @@ namespace vm
 	writer_lock::writer_lock(u32 const addr, atomic_t<u64, 128>* range_lock, u32 const size, u64 const flags) noexcept
 		: range_lock(range_lock)
 	{
-		cpu_thread* cpu{};
-
-		if (g_tls_locked)
+		if (cpu_thread* cpu = cpu_thread::get_current(); cpu && cpu->get_class() == thread_class::ppu)
 		{
-			cpu = get_current_cpu_thread();
-			AUDIT(cpu);
-
-			if (*g_tls_locked != cpu || cpu->state & cpu_flag::wait)
+			// cpu_flag::wait must be added by the caller
+			// We cannot manage it internally within vm::writer_lock
+			// Because in doing that, cpu_thread::check_state() needs to be called
+			// Which may not be suitable for the code that writer_lock is used at
+			if (!(cpu->state & cpu_flag::wait))
 			{
-				cpu = nullptr;
-			}
-			else
-			{
-				cpu->state += cpu_flag::wait;
+				// If lock is not set than it is technically fine, though a bit odd for usage
+				if (g_tls_locked)
+				{
+					fmt::throw_exception("vm::writer_lock is being used without cpu_flag::wait set by the caller!\nPlease report to the developers.");
+				}
 			}
 		}
 
 		for (u64 i = 0;; i++)
 		{
 			auto& bits = get_range_lock_bits(true);
+
+			if (!!bits)
+			{
+				if (i == 0 && g_cfg.core.ppu_reservation_priority_over_spu)
+				{
+					busy_wait(5000);
+				}
+			}
 
 			if (!range_lock)
 			{
@@ -595,11 +589,6 @@ namespace vm
 					}
 				}
 			}
-		}
-
-		if (cpu)
-		{
-			cpu->state -= cpu_flag::memory + cpu_flag::wait;
 		}
 	}
 
@@ -1063,15 +1052,15 @@ namespace vm
 		return size;
 	}
 
-	bool check_addr(u32 addr, u8 flags, u32 size)
+	bool check_addr(u64 addr, u8 flags, u32 size)
 	{
 		if (size == 0)
 		{
 			return true;
 		}
 
-		// Overflow checking
-		if (0x10000'0000ull - addr < size)
+		// u64 addressing is not supported at the moment
+		if (addr > u32{umax} || 0x10000'0000ull - addr < size)
 		{
 			return false;
 		}
@@ -1079,7 +1068,7 @@ namespace vm
 		// Always check this flag
 		flags |= page_allocated;
 
-		for (u32 i = addr / 4096, max = (addr + size - 1) / 4096; i <= max;)
+		for (u64 i = addr / 4096, max = (addr + size - 1) / 4096; i <= max;)
 		{
 			auto state = +g_pages[i];
 
@@ -1331,6 +1320,8 @@ namespace vm
 
 		if (m_id.exchange(0))
 		{
+			std::unordered_map<const utils::shm*, s64> mapping_refs;
+
 			// Deallocate all memory
 			for (auto it = m_map.begin(), end = m_map.end(); it != end;)
 			{
@@ -1344,7 +1335,40 @@ namespace vm
 				{
 					if (it->second.second.use_count() != 1)
 					{
-						fmt::throw_exception("External memory usage at block 0x%x (addr=0x%x, size=0x%x)", this->addr, it->first, size);
+						if (mapping_refs.empty())
+						{
+							const auto count_refs = [&mapping_refs](const auto& map)
+							{
+								for (const auto& entry : map)
+								{
+									if (entry.second.second)
+									{
+										mapping_refs[entry.second.second.get()]++;
+									}
+								}
+							};
+
+							// count this block separately, vm::unmap removes it from g_locations before calling us
+							count_refs(m_map);
+
+							for (const auto& block : g_locations)
+							{
+								if (block && block.get() != this)
+								{
+									count_refs((block->m.*block_map)());
+								}
+							}
+						}
+
+						if (it->second.second.use_count() != mapping_refs.at(it->second.second.get()))
+						{
+							fmt::throw_exception("External memory usage at block 0x%x (addr=0x%x, size=0x%x)", this->addr, it->first, size);
+						}
+					}
+
+					if (!mapping_refs.empty())
+					{
+						mapping_refs.at(it->second.second.get())--;
 					}
 
 					it->second.second.reset();
@@ -1693,8 +1717,8 @@ namespace vm
 
 				for (usz i = 0; i < byte_of_pages; i += 128 * 2)
 				{
-					const u64 sample64_1 = read_from_ptr<u64>(data_ptr, i);
-					const u64 sample64_2 = read_from_ptr<u64>(data_ptr, i + 128);
+					const u64 sample64_1 = read_from_ptr_unsafe<u64>(data_ptr, i);
+					const u64 sample64_2 = read_from_ptr_unsafe<u64>(data_ptr, i + 128);
 
 					// Speed up testing in scenarios where it is likely non-zero data
 					if (sample64_1 && sample64_2)
@@ -1812,7 +1836,7 @@ namespace vm
 
 		while (true)
 		{
-			const u8 flags0 = ar;
+			const u8 flags0{ar};
 
 			if (!(flags0 & page_allocated))
 			{
@@ -1820,8 +1844,8 @@ namespace vm
 				break;
 			}
 
-			const u32 addr0 = ar;
-			const u32 size0 = ar;
+			const u32 addr0{ar};
+			const u32 size0{ar};
 
 			u64 pflags = 0;
 
@@ -2091,8 +2115,16 @@ namespace vm
 
 			if (!loc)
 			{
-				// Deferred allocation
-				loc = _find_map(area_size, 0x10000000, flags);
+				if (location == vm::main || addr == 0x00010000)
+				{
+					// Special
+					loc = std::make_shared<block_t>(addr, area_size, page_size_64k | preallocated);
+				}
+				else
+				{
+					// Deferred allocation
+					loc = _find_map(area_size, 0x10000000, flags);
+				}
 			}
 
 			return loc;
@@ -2240,7 +2272,7 @@ namespace vm
 
 			g_locations =
 			{
-				std::make_shared<block_t>(0x00010000, 0x0FFF0000, page_size_64k | preallocated), // main
+				nullptr,                                                                         // main
 				nullptr,		                                                                 // user 64k pages
 				nullptr,                                                                         // user 1m pages
 				nullptr,                                                                         // rsx context
@@ -2305,29 +2337,10 @@ namespace vm
 
 		std::map<utils::shm*, usz> shared_map;
 
-#ifndef _MSC_VER
-		shared.erase(std::unique(shared.begin(), shared.end(), [](auto& a, auto& b) { return a.first == b.first; }), shared.end());
-#else
-		// Workaround for bugged std::unique
-		for (auto it = shared.begin(); it != shared.end();)
+		std::erase_if(shared, [&](const auto& memory)
 		{
-			if (shared_map.count(it->first))
-			{
-				it = shared.erase(it);
-				continue;
-			}
-
-			shared_map.emplace(it->first, 0);
-			it++;
-		}
-
-		shared_map.clear();
-#endif
-
-		for (auto& p : shared)
-		{
-			shared_map.emplace(p.first, &p - shared.data());
-		}
+			return !shared_map.emplace(memory.first, shared_map.size()).second;
+		});
 
 		// TODO: proper serialization of std::map
 		ar(static_cast<usz>(shared_map.size()));
@@ -2463,6 +2476,12 @@ namespace vm
 		// Non-null terminated but terminated by size limit (so the string may continue)
 		return size == max_size;
 	}
+}
+
+template <>
+void fmt_class_string<vm::addr_t>::format(std::string& out, u64 arg)
+{
+	fmt_class_string<u32>::format(out, arg);
 }
 
 void fmt_class_string<vm::_ptr_base<const void, u32>>::format(std::string& out, u64 arg)

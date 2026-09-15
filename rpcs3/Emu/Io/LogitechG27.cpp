@@ -266,12 +266,28 @@ static const std::map<logitech_personality,
 }
 };
 
-// ref: https://github.com/libsdl-org/SDL/issues/7941, need to use SDL_HAPTIC_STEERING_AXIS for some windows drivers
-static constexpr SDL_HapticDirection STEERING_DIRECTION =
+// Configurable because some Windows DirectInput drivers silently ignore
+// SDL_HAPTIC_STEERING_AXIS; see https://github.com/libsdl-org/SDL/issues/7941 .
+SDL_HapticDirection usb_device_logitech_g27::make_steering_direction() const
 {
-	.type = SDL_HAPTIC_STEERING_AXIS,
-	.dir = {0, 0, 0}
-};
+	SDL_HapticDirection dir {};
+	switch (g_cfg_logitech_g27.ffb_direction_type.get())
+	{
+	case g27_ffb_direction_type::steering_axis:
+		dir.type = SDL_HAPTIC_STEERING_AXIS;
+		dir.dir[0] = 0;
+		break;
+	case g27_ffb_direction_type::cartesian:
+		dir.type = SDL_HAPTIC_CARTESIAN;
+		dir.dir[0] = 1;
+		break;
+	case g27_ffb_direction_type::polar:
+		dir.type = SDL_HAPTIC_POLAR;
+		dir.dir[0] = 0;
+		break;
+	}
+	return dir;
+}
 
 void usb_device_logitech_g27::set_personality(logitech_personality personality, bool reconnect)
 {
@@ -298,8 +314,10 @@ usb_device_logitech_g27::usb_device_logitech_g27(u32 controller_index, const std
 {
 	set_personality(logitech_personality::driving_force_ex);
 
+	g_cfg_logitech_g27.load();
+
 	m_default_spring_effect.type = SDL_HAPTIC_SPRING;
-	m_default_spring_effect.condition.direction = STEERING_DIRECTION;
+	m_default_spring_effect.condition.direction = make_steering_direction();
 	m_default_spring_effect.condition.length = SDL_HAPTIC_INFINITY;
 	for (int i = 0; i < 1 /*3*/; i++)
 	{
@@ -308,8 +326,6 @@ usb_device_logitech_g27::usb_device_logitech_g27(u32 controller_index, const std
 		m_default_spring_effect.condition.right_coeff[i] = 0x7FFF;
 		m_default_spring_effect.condition.left_coeff[i] = 0x7FFF;
 	}
-
-	g_cfg_logitech_g27.load();
 
 	m_enabled = g_cfg_logitech_g27.enabled.get() && sdl_instance::get_instance().initialize();
 
@@ -884,7 +900,7 @@ static s16 fetch_sdl_as_axis(SDL_Joystick* joystick, const sdl_mapping& mapping)
 	return 0;
 }
 
-static s16 fetch_sdl_axis_avg(std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
+static s16 fetch_sdl_axis_avg(const std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
 {
 	constexpr s16 MAX = 0x7FFF;
 	constexpr s16 MIN = -0x8000;
@@ -910,7 +926,7 @@ static s16 fetch_sdl_axis_avg(std::map<u64, std::vector<SDL_Joystick*>>& joystic
 	return std::clamp<s16>(sdl_joysticks_total_value / static_cast<s32>(joysticks_of_type->second.size()), MIN, MAX);
 }
 
-static bool sdl_to_logitech_g27_button(std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
+static bool sdl_to_logitech_g27_button(const std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
 {
 	auto joysticks_of_type = joysticks.find(mapping.device_type_id);
 	if (joysticks_of_type == joysticks.end())
@@ -931,32 +947,21 @@ static bool sdl_to_logitech_g27_button(std::map<u64, std::vector<SDL_Joystick*>>
 	return pressed;
 }
 
-static u16 sdl_to_logitech_g27_steering(std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
+static u16 sdl_to_logitech_g27_steering(const std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
 {
 	const s16 avg = fetch_sdl_axis_avg(joysticks, mapping);
 	const u16 unsigned_avg = avg + 0x8000;
 	return unsigned_avg * (0xFFFF >> 2) / 0xFFFF;
 }
 
-static u8 sdl_to_logitech_g27_pedal(std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
+static u8 sdl_to_logitech_g27_pedal(const std::map<u64, std::vector<SDL_Joystick*>>& joysticks, const sdl_mapping& mapping)
 {
 	const s16 avg = fetch_sdl_axis_avg(joysticks, mapping);
 	const u16 unsigned_avg = avg + 0x8000;
 	return unsigned_avg * 0xFF / 0xFFFF;
 }
 
-static inline void set_bit(u8* buf, int bit_num, bool set)
-{
-	const int byte_num = bit_num / 8;
-	bit_num %= 8;
-	const u8 mask = 1 << bit_num;
-	if (set)
-		buf[byte_num] = buf[byte_num] | mask;
-	else
-		buf[byte_num] = buf[byte_num] & (~mask);
-}
-
-void usb_device_logitech_g27::transfer_dfex(u32 buf_size, u8* buf, UsbTransfer* transfer)
+void usb_device_logitech_g27::transfer_dfex(u32 buf_size, u8* buf, UsbTransfer* transfer) const
 {
 	DFEX_data data{};
 	ensure(buf_size >= sizeof(data));
@@ -990,7 +995,7 @@ void usb_device_logitech_g27::transfer_dfex(u32 buf_size, u8* buf, UsbTransfer* 
 	std::memcpy(buf, &data, sizeof(data));
 }
 
-void usb_device_logitech_g27::transfer_dfp(u32 buf_size, u8* buf, UsbTransfer* transfer)
+void usb_device_logitech_g27::transfer_dfp(u32 buf_size, u8* buf, UsbTransfer* transfer) const
 {
 	DFP_data data{};
 	ensure(buf_size >= sizeof(data));
@@ -1026,7 +1031,7 @@ void usb_device_logitech_g27::transfer_dfp(u32 buf_size, u8* buf, UsbTransfer* t
 	std::memcpy(buf, &data, sizeof(data));
 }
 
-void usb_device_logitech_g27::transfer_dfgt(u32 buf_size, u8* buf, UsbTransfer* transfer)
+void usb_device_logitech_g27::transfer_dfgt(u32 buf_size, u8* buf, UsbTransfer* transfer) const
 {
 	DFGT_data data{};
 	ensure(buf_size >= sizeof(data));
@@ -1068,7 +1073,7 @@ void usb_device_logitech_g27::transfer_dfgt(u32 buf_size, u8* buf, UsbTransfer* 
 	std::memcpy(buf, &data, sizeof(data));
 }
 
-void usb_device_logitech_g27::transfer_g25(u32 buf_size, u8* buf, UsbTransfer* transfer)
+void usb_device_logitech_g27::transfer_g25(u32 buf_size, u8* buf, UsbTransfer* transfer) const
 {
 	G25_data data{};
 	ensure(buf_size >= sizeof(data));
@@ -1116,7 +1121,7 @@ void usb_device_logitech_g27::transfer_g25(u32 buf_size, u8* buf, UsbTransfer* t
 	std::memcpy(buf, &data, sizeof(data));
 }
 
-void usb_device_logitech_g27::transfer_g27(u32 buf_size, u8* buf, UsbTransfer* transfer)
+void usb_device_logitech_g27::transfer_g27(u32 buf_size, u8* buf, UsbTransfer* transfer) const
 {
 	G27_data data{};
 	ensure(buf_size >= sizeof(data));
@@ -1355,7 +1360,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Constant force
 						new_effect.type = SDL_HAPTIC_CONSTANT;
-						new_effect.constant.direction = STEERING_DIRECTION;
+						new_effect.constant.direction = make_steering_direction();
 						new_effect.constant.length = SDL_HAPTIC_INFINITY;
 						new_effect.constant.level = logitech_g27_force_to_level(buf[2 + i], m_reverse_effects);
 						break;
@@ -1365,7 +1370,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Spring/High resolution spring
 						new_effect.type = SDL_HAPTIC_SPRING;
-						new_effect.condition.direction = STEERING_DIRECTION;
+						new_effect.condition.direction = make_steering_direction();
 						new_effect.condition.length = SDL_HAPTIC_INFINITY;
 						const u8 s1 = buf[5] & 1;
 						const u8 s2 = (buf[5] >> 4) & 1;
@@ -1416,7 +1421,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Damper/High resolution damper
 						new_effect.type = SDL_HAPTIC_DAMPER;
-						new_effect.condition.direction = STEERING_DIRECTION;
+						new_effect.condition.direction = make_steering_direction();
 						new_effect.condition.length = SDL_HAPTIC_INFINITY;
 						const u8 s1 = buf[3] & 1;
 						const u8 s2 = buf[5] & 1;
@@ -1456,7 +1461,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Friction
 						new_effect.type = SDL_HAPTIC_FRICTION;
-						new_effect.condition.direction = STEERING_DIRECTION;
+						new_effect.condition.direction = make_steering_direction();
 						new_effect.condition.length = SDL_HAPTIC_INFINITY;
 						const u8 k1 = buf[2];
 						const u8 k2 = buf[3];
@@ -1483,7 +1488,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Auto center spring/High resolution auto center spring
 						new_effect.type = SDL_HAPTIC_SPRING;
-						new_effect.condition.direction = STEERING_DIRECTION;
+						new_effect.condition.direction = make_steering_direction();
 						new_effect.condition.length = SDL_HAPTIC_INFINITY;
 						const u16 saturation = logitech_g27_clip_to_saturation(buf[4]);
 						constexpr u16 deadband = 2 * 0xFFFF / 255;
@@ -1529,7 +1534,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 						else
 							new_effect.type = m_reverse_effects ? SDL_HAPTIC_SAWTOOTHUP : SDL_HAPTIC_SAWTOOTHDOWN;
 						new_effect.type = buf[1] == 0x04 ? SDL_HAPTIC_SAWTOOTHUP : SDL_HAPTIC_SAWTOOTHDOWN;
-						new_effect.periodic.direction = STEERING_DIRECTION;
+						new_effect.periodic.direction = make_steering_direction();
 						new_effect.periodic.length = SDL_HAPTIC_INFINITY;
 						const u8 l1 = buf[2];
 						const u8 l2 = buf[3];
@@ -1569,7 +1574,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Trapezoid, convert to SDL_HAPTIC_SQUARE or SDL_HAPTIC_TRIANGLE
 						// TODO full accuracy will need some kind of rendering thread, cannot be represented with a single effect
-						new_effect.periodic.direction = STEERING_DIRECTION;
+						new_effect.periodic.direction = make_steering_direction();
 						new_effect.periodic.length = SDL_HAPTIC_INFINITY;
 						const u8 l1 = buf[2];
 						const u8 l2 = buf[3];
@@ -1598,7 +1603,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 						// Rectangle, convert to SDL_HAPTIC_SQUARE
 						// TODO full accuracy will need some kind of rendering thread, cannot be represented with a single effect
 						new_effect.type = SDL_HAPTIC_SQUARE;
-						new_effect.periodic.direction = STEERING_DIRECTION;
+						new_effect.periodic.direction = make_steering_direction();
 						new_effect.periodic.length = SDL_HAPTIC_INFINITY;
 						const u8 l1 = buf[2];
 						const u8 l2 = buf[3];
@@ -1641,7 +1646,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 							const u8 d = i == 0 ? d1 : d2;
 							const u8 l = i == 0 ? l1 : l2;
 							new_effect.constant.length = SDL_HAPTIC_INFINITY;
-							new_effect.constant.direction = STEERING_DIRECTION;
+							new_effect.constant.direction = make_steering_direction();
 							if (s == 0 || t == 0)
 							{
 								// gran turismo 6 does this, gives a variable force with no step so it just behaves as constant force
@@ -1666,7 +1671,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 						else
 						{
 							new_effect.type = SDL_HAPTIC_RAMP;
-							new_effect.ramp.direction = STEERING_DIRECTION;
+							new_effect.ramp.direction = make_steering_direction();
 							if (l2 > l1)
 								logitech_g27_log.error("min force is larger than max force in ramp effect, l1 %u l2 %u", l1, l2);
 							const s16 l1_converted = logitech_g27_force_to_level(l1, m_reverse_effects);
@@ -1685,7 +1690,7 @@ void usb_device_logitech_g27::interrupt_transfer(u32 buf_size, u8* buf, u32 endp
 					{
 						// Square
 						new_effect.type = SDL_HAPTIC_SQUARE;
-						new_effect.periodic.direction = STEERING_DIRECTION;
+						new_effect.periodic.direction = make_steering_direction();
 						const u8 a = buf[2];
 						const u8 tl = buf[3];
 						const u8 th = buf[4];

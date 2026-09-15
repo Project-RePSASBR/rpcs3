@@ -58,6 +58,7 @@ enum class game_boot_result : u32
 	still_running,
 	already_added,
 	currently_restricted,
+	database_config_missing,
 };
 
 constexpr bool is_error(game_boot_result res)
@@ -105,15 +106,17 @@ struct EmuCallbacks
 	std::function<void(const std::string&, std::optional<f32>)> play_sound;
 	std::function<bool(const std::string&, std::string&, s32&, s32&, s32&)> get_image_info; // (filename, sub_type, width, height, CellSearchOrientation)
 	std::function<bool(const std::string&, s32, s32, s32&, s32&, u8*, bool)> get_scaled_image; // (filename, target_width, target_height, width, height, dst, force_fit)
-	std::string(*resolve_path)(std::string_view) = [](std::string_view arg){ return std::string{arg}; }; // Resolve path using Qt
+	std::function<std::string(std::string_view)> resolve_path = [](std::string_view arg){ return std::string{arg}; }; // Resolve path using Qt (returns empty string if the file doesn't exist)
+	std::function<std::string(std::string_view)> resolve_path_may_not_exist = [](std::string_view arg){ return std::string{arg}; }; // Resolve path using Qt
 	std::function<std::vector<std::string>()> get_font_dirs;
-	std::function<bool(const std::vector<std::string>&)> on_install_pkgs;
+	std::function<bool(const std::vector<std::string>&, bool)> on_install_pkgs;
 	std::function<void(u32)> add_breakpoint;
 	std::function<bool()> display_sleep_control_supported;
 	std::function<void(bool)> enable_display_sleep;
 	std::function<void()> check_microphone_permissions;
 	std::function<std::unique_ptr<class video_source>()> make_video_source;
 	std::function<void(bool)> enable_gamemode;
+	std::function<std::string(const std::string&)> get_database_config;
 };
 
 namespace utils
@@ -140,11 +143,13 @@ class Emulator final
 
 	games_config m_games_config;
 
+	std::set<video_renderer> m_supported_renderers;
 	video_renderer m_default_renderer;
 	std::string m_default_graphics_adapter;
 
 	cfg_mode m_config_mode = cfg_mode::custom;
 	std::string m_config_path;
+	std::optional<std::string> m_db_config; // std::nullopt means it has not been retrieved yet
 	std::string m_path;
 	std::string m_path_old;
 	std::string m_path_original;
@@ -169,6 +174,8 @@ class Emulator final
 
 	bool m_continuous_mode = false;
 	bool m_has_gui = true;
+	bool m_headless = false;
+	bool m_add_database_config = false;
 
 	bool m_state_inspection_savestate = false;
 
@@ -201,13 +208,17 @@ public:
 	static constexpr std::string_view game_id_boot_prefix = "%RPCS3_GAMEID%:";
 	static constexpr std::string_view vfs_boot_prefix = "%RPCS3_VFS%:";
 
-	Emulator() noexcept = default;
-	~Emulator() noexcept = default;
+	Emulator() noexcept;
+	~Emulator() noexcept;
+
+	static bool IsAvailable() noexcept;
 
 	void SetCallbacks(EmuCallbacks&& cb)
 	{
 		m_cb = std::move(cb);
 	}
+
+	void SetGameDir(const std::string& game_dir) { m_game_dir = game_dir; }
 
 	const auto& GetCallbacks() const
 	{
@@ -271,7 +282,7 @@ public:
 
 	u32 m_boot_source_type = 0; // CELL_GAME_GAMETYPE_SYS
 
-	const u32& GetBootSourceType() const
+	u32 GetBootSourceType() const
 	{
 		return m_boot_source_type;
 	}
@@ -364,6 +375,12 @@ public:
 		return m_config_path;
 	}
 
+	const std::string& GetUsedDatabaseConfig() const
+	{
+		static std::string empty_db_config;
+		return m_db_config ? *m_db_config : empty_db_config;
+	}
+
 	bool IsChildProcess() const
 	{
 		return m_config_mode == cfg_mode::continuous;
@@ -413,8 +430,13 @@ public:
 		return emulation_state_guard_t{this};
 	}
 
-	game_boot_result BootGame(const std::string& path, const std::string& title_id = "", bool direct = false, cfg_mode config_mode = cfg_mode::custom, const std::string& config_path = "");
+	game_boot_result BootGame(const std::string& path, const std::string& title_id = "", bool direct = false, cfg_mode config_mode = cfg_mode::custom, const std::string& config_path = "", const std::optional<std::string>& db_config = std::nullopt);
 	bool BootRsxCapture(const std::string& path);
+
+	// Boots a minimal shell (no PS3 executable) that hosts the RSX-overlay-based Big Picture Mode game grid.
+	bool BootBigPictureMode();
+	// Cancel any pending return to Big Picture Mode, e.g. when a game is booted manually and bypasses the shell.
+	void DeactivateBigPictureMode() const;
 
 	void SetForceBoot(bool force_boot);
 	void SetContinuousMode(bool continuous_mode);
@@ -442,7 +464,7 @@ public:
 	void Resume();
 	void GracefulShutdown(bool allow_autoexit = true, bool async_op = false, bool savestate = false, bool continuous_mode = false);
 	void Kill(bool allow_autoexit = true, bool savestate = false, savestate_stage* stage = nullptr);
-	game_boot_result Restart(bool graceful = true);
+	game_boot_result Restart(bool graceful = true, bool reset_path = true);
 	bool Quit(bool force_quit);
 	static void CleanUp();
 
@@ -458,6 +480,13 @@ public:
 	bool HasGui() const { return m_has_gui; }
 	void SetHasGui(bool has_gui) { m_has_gui = has_gui; }
 
+	bool IsHeadless() const { return m_headless; }
+	void SetHeadless(bool headless) { m_headless = headless; }
+
+	const std::set<video_renderer>& GetSupportedRenderers() const { return m_supported_renderers; }
+	void SetSupportedRenderers(std::set<video_renderer> renderers) { m_supported_renderers = std::move(renderers); }
+
+	video_renderer GetDefaultRenderer() const { return m_default_renderer; }
 	void SetDefaultRenderer(video_renderer renderer) { m_default_renderer = renderer; }
 	void SetDefaultGraphicsAdapter(std::string adapter) { m_default_graphics_adapter = std::move(adapter); }
 
@@ -466,15 +495,18 @@ public:
 	void ConfigurePPUCache() const;
 
 	std::set<std::string> GetGameDirs() const;
-	u32 AddGamesFromDir(const std::string& path);
-	game_boot_result AddGame(const std::string& path);
-	game_boot_result AddGameToYml(const std::string& path);
+	u32 AddGamesFromDir(std::string path);
+
+	// "is_iso" tells the caller has already recognized the path as an ISO file (or as a raw device holding a disc):
+	// checking it again would read its volume descriptor once more, which is a physical read on an optical drive
+	game_boot_result AddGame(std::string path, bool is_iso = false);
+	game_boot_result AddGameToYml(std::string path, bool is_iso = false);
 	u32 RemoveGamesFromDir(const std::string& games_dir, const std::vector<std::string>& serials_to_remove_from_yml = {}, bool save_on_disk = true);
 	u32 RemoveGames(const std::vector<std::string>& title_id_list, bool save_on_disk = true);
 	game_boot_result RemoveGameFromYml(const std::string& title_id);
 
 	// Check if path is inside the specified directory
-	bool IsPathInsideDir(std::string_view path, std::string_view dir) const;
+	bool IsPathInsideDir(std::string_view path, std::string_view dir, bool check_if_exists = true) const;
 	game_boot_result VerifyPathCasing(std::string_view path, std::string_view dir, bool from_dir) const;
 
 	void EjectDisc();
@@ -487,7 +519,7 @@ public:
 	static bool IsVsh();
 	static bool IsValidSfb(const std::string& path);
 
-	static void SaveSettings(const std::string& settings, const std::string& title_id);
+	static void SaveSettings(std::string_view settings, const std::string& title_id);
 };
 
 extern Emulator Emu;

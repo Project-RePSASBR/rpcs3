@@ -520,10 +520,11 @@ error_code cellHddGameCheck(ppu_thread& ppu, u32 version, vm::cptr<char> dirName
 				return CELL_GAMEDATA_ERROR_PARAM;
 			}
 
-			if (!fs::create_path(vfs::get(usrdir)))
-			{
-				return {CELL_GAME_ERROR_ACCESS_ERROR, usrdir};
-			}
+			// Nuked until correctly reversed engineered
+			//if (!fs::create_path(vfs::get(usrdir)))
+			//{
+			//	return {CELL_GAME_ERROR_ACCESS_ERROR, usrdir};
+			//}
 		}
 
 		// Nuked until correctly reversed engineered
@@ -1312,7 +1313,7 @@ error_code cellGameDeleteGameData(vm::cptr<char> dirName)
 {
 	cellGame.warning("cellGameDeleteGameData(dirName=%s)", dirName);
 
-	if (!dirName)
+	if (!dirName || sysutil_check_name_string(dirName.get_ptr(), 1, CELL_GAME_DIRNAME_SIZE) != 0)
 	{
 		return CELL_GAME_ERROR_PARAM;
 	}

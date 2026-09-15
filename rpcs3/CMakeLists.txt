@@ -81,16 +81,10 @@ if (NOT ANDROID)
 
     # Unix display manager
     if(X11_FOUND)
-        target_link_libraries(rpcs3_lib PRIVATE X11::X11)
+        target_link_libraries(rpcs3_lib PRIVATE X11::X11 xkbcommon-x11)
     elseif(USE_VULKAN AND UNIX AND NOT WAYLAND_FOUND AND NOT APPLE AND NOT ANDROID)
         # Wayland has been checked in 3rdparty/CMakeLists.txt already.
         message(FATAL_ERROR "RPCS3 requires either X11 or Wayland (or both) for Vulkan.")
-    endif()
-
-    if(UNIX)
-        set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
-        find_package(Threads REQUIRED)
-        target_link_libraries(rpcs3_lib PRIVATE Threads::Threads)
     endif()
 
     if(WIN32)
@@ -188,13 +182,20 @@ if(BUILD_RPCS3_TESTS)
     target_sources(rpcs3_test
         PRIVATE
             tests/test.cpp
+            tests/test_bit_set.cpp
             tests/test_fmt.cpp
             tests/test_pair.cpp
             tests/test_tuple.cpp
             tests/test_simple_array.cpp
             tests/test_address_range.cpp
+            tests/test_sys_fs.cpp
+            tests/test_iso_open.cpp
+            tests/test_iso_extent.cpp
             tests/test_rsx_cfg.cpp
             tests/test_rsx_fp_asm.cpp
+            tests/test_dmux_pamf.cpp
+            tests/test_spu_analyser.cpp
+            tests/test_types_util.cpp
     )
 
     target_link_libraries(rpcs3_test
@@ -202,6 +203,7 @@ if(BUILD_RPCS3_TESTS)
             rpcs3_lib
             rpcs3_emu
             GTest::gtest
+            GTest::gmock
     )
 
     target_include_directories(rpcs3_test
