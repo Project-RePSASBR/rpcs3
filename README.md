@@ -1,3 +1,15 @@
+# RPCS3 for All-Stars Matchmaker
+
+This is a fork of RPCS3 that implements customizations to enable use of online multiplayer for the game PlayStation All-Stars Battle Royale by using the project All-Stars Matchmaker. Compared to upstream it features:
+
+- Customization to handle PSASBR P2P traffic and to use the All-Stars Matchmaker connector
+- Memory breakpoints enabled by default on the builds
+- Custom branding icon using All-Stars Matchmaker style
+
+This fork may be periodically updated with upstream changes depending on wether or not there are significant improvements to be implemented, but the game is considered already playable with the right specs and does not need the emulator to be frequently updated. This fork works just fine with other games and should not break anything for other P2P games, but as it will not be always on par with upstream and as it features customizations in the P2P implementation you shouldn't opt for this version for anything other than playing PlayStation All-Stars Battle Royale online through All-Stars Matchmaker.
+
+---
+
 RPCS3
 =====
 
