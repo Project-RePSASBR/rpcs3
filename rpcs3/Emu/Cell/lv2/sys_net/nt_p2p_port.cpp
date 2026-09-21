@@ -401,11 +401,6 @@ bool nt_p2p_port::recv_data()
 				return true;
 			}
 
-			const auto bswap16 = [](u16 v) -> u16
-			{
-				return static_cast<u16>((v >> 8) | (v << 8));
-			};
-
 			const auto read_be16 = [](const u8* p) -> u16
 			{
 				return static_cast<u16>((static_cast<u16>(p[0]) << 8) | p[1]);
@@ -429,31 +424,12 @@ bool nt_p2p_port::recv_data()
 						return true;
 					}
 				}
+
+				sys_net.notice("Dropping PSASBR P2P packet targeted at unbound vport(vport=%d)", framed_local_vport);
+				return true;
 			}
 
-			// Some packets fail the dispatch above. Unsure what's different, but so far I can tell it's packets reporting
-			// Player count in a lobby, which are also broadcasted
-			// I've encountered a bug where entering multiple times a lobby fills players slots with phantom clients
-			// Causing the game to eventually crash when trying to navigate the menu. It's not consistent, but it can happen
-			// Take these packets and dispatch them to all vports
-			// This *might* fix the bug, but needs more testing. At worst it doesn't do anything at all
-			const u16 src_vport_be         = bswap16(src_vport);
-			const u16 guessed_remote_vport = src_vport_be ? src_vport_be : src_vport;
-			std::vector<u16> local_vports;
-			local_vports.reserve(bound_p2p_vports.size());
-			for (const auto& [local_vport, _] : bound_p2p_vports)
-			{
-				local_vports.push_back(local_vport);
-			}
-
-			for (const u16 local_vport : local_vports)
-			{
-				if (dispatch_datagram_to_vport(local_vport, guessed_remote_vport, raw_data))
-				{
-					// sys_net.notice("----- PSAS PLAYER COUNT DATA -----");
-				}
-			}
-
+			sys_net.notice("Dropping PSASBR P2P packet with invalid framing");
 			return true;
 		} // End of section dealing with PlayStation All-Stars Battle Royale
 
