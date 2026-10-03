@@ -327,12 +327,8 @@ bool nt_p2p_port::recv_data()
 		return true;
 	}
 
-	const u16 src_vport = *reinterpret_cast<le_t<u16>*>(p2p_recv_data.data() + sizeof(u16));
-	const u16 vport_flags = *reinterpret_cast<le_t<u16>*>(p2p_recv_data.data() + sizeof(u16) + sizeof(u16));
 	std::vector<u8> p2p_data(recv_res - VPORT_P2P_HEADER_SIZE);
 	memcpy(p2p_data.data(), p2p_recv_data.data() + VPORT_P2P_HEADER_SIZE, p2p_data.size());
-	constexpr u16 known_p2p_flags = P2P_FLAG_P2P | P2P_FLAG_P2PS;
-	const bool has_unknown_flags = (vport_flags & ~known_p2p_flags) != 0;
 
 	const auto dispatch_datagram_to_vport = [&](u16 local_vport, u16 remote_vport, const std::vector<u8>& data_to_dispatch) -> bool
 	{
@@ -381,59 +377,48 @@ bool nt_p2p_port::recv_data()
 		return true;
 	};
 
+	// Handle PSASBR P2P native frames first, they contain BE vports, not P2P flags
+	if (p2p_recv_data[0] == 0xFF && p2p_recv_data[1] == 0x83)
+	{
+		sys_net_helpers::detect_psas_lan_beacon(p2p_recv_data.data(), recv_res);
+
+		if (sys_net_helpers::is_psas_lan_mode_enabled())
+		{
+			const auto read_be16 = [](const u8* p) -> u16
+			{
+				return static_cast<u16>((static_cast<u16>(p[0]) << 8) | p[1]);
+			};
+
+			const u16 framed_remote_vport = read_be16(p2p_recv_data.data() + 2);
+			const u16 framed_local_vport  = read_be16(p2p_recv_data.data() + 4);
+
+			std::lock_guard lock(bound_p2p_vports_mutex);
+			if (framed_local_vport && dispatch_datagram_to_vport(framed_local_vport, framed_remote_vport, p2p_data))
+			{
+				return true;
+			}
+
+			sys_net.notice("Dropping PSASBR P2P packet targeted at unbound vport(vport=%d)", framed_local_vport);
+			return true;
+		}
+	} // End of section dealing with PlayStation All-Stars Battle Royale
+	
+	// Keep the original behaviour when dealing with normal P2P traffic to not potentially break other games in P2P
+	const u16 src_vport = *reinterpret_cast<le_t<u16>*>(p2p_recv_data.data() + sizeof(u16));
+	const u16 vport_flags = *reinterpret_cast<le_t<u16>*>(p2p_recv_data.data() + sizeof(u16) + sizeof(u16));
+	constexpr u16 known_p2p_flags = P2P_FLAG_P2P | P2P_FLAG_P2PS;
+	const bool has_unknown_flags = (vport_flags & ~known_p2p_flags) != 0;
+
 	if (vport_flags & P2P_FLAG_P2P)
 	{
 		std::lock_guard lock(bound_p2p_vports_mutex);
 
 		if (has_unknown_flags)
 		{
-			// The P2P traffic does not have expected data. Need to handle it differently
-			// This snippet handles the game PlayStation All-Stars Battle Royale
-			std::vector<u8> raw_data(recv_res);
-			memcpy(raw_data.data(), p2p_recv_data.data(), raw_data.size());
-
-			sys_net_helpers::detect_psas_lan_beacon(raw_data.data(), raw_data.size());
-
-			if (!sys_net_helpers::is_psas_lan_mode_enabled())
-			{
-				// It's not being detected as PSASBR LAN data, and it's not known traffic either, ignore
-				sys_net.notice("Received P2P packet with unknown flags(vport_flags=0x%x)", vport_flags);
-				return true;
-			}
-
-			const auto read_be16 = [](const u8* p) -> u16
-			{
-				return static_cast<u16>((static_cast<u16>(p[0]) << 8) | p[1]);
-			};
-
-			// PSASBR framing always starts with 0xFF83
-			// We need to read correctly the vports, strip the header and dispatch the data to the game
-			if (recv_res >= VPORT_P2P_HEADER_SIZE && p2p_recv_data[0] == 0xFF && p2p_recv_data[1] == 0x83)
-			{
-				const u16 framed_remote_vport = read_be16(p2p_recv_data.data() + 2);
-				const u16 framed_local_vport  = read_be16(p2p_recv_data.data() + 4);
-
-				if (framed_local_vport)
-				{
-					std::vector<u8> framed_payload(recv_res - VPORT_P2P_HEADER_SIZE);
-					memcpy(framed_payload.data(), p2p_recv_data.data() + VPORT_P2P_HEADER_SIZE, framed_payload.size());
-
-					if (dispatch_datagram_to_vport(framed_local_vport, framed_remote_vport, framed_payload))
-					{
-						// sys_net.notice("----- PSAS RAW FRAMING -----");
-						return true;
-					}
-				}
-
-				sys_net.notice("Dropping PSASBR P2P packet targeted at unbound vport(vport=%d)", framed_local_vport);
-				return true;
-			}
-
-			sys_net.notice("Dropping PSASBR P2P packet with invalid framing");
+			sys_net.notice("Received P2P packet with unknown flags(vport_flags=0x%x)", vport_flags);
 			return true;
-		} // End of section dealing with PlayStation All-Stars Battle Royale
+		}
 
-		// Keep the original behaviour when dealing with normal P2P traffic to not potentially break other games in P2P
 		if (dispatch_datagram_to_vport(dst_vport, src_vport, p2p_data))
 		{
 			return true;
