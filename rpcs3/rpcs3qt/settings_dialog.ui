@@ -2268,7 +2268,7 @@
                <property name="title">
                 <string>Network Configuration</string>
                </property>
-               <layout class="QVBoxLayout" name="gb_network_status_layout" stretch="0,0,0,0,0,0,0">
+               <layout class="QVBoxLayout" name="gb_network_status_layout" stretch="0,0,0,0,0,0,0,0">
                 <item>
                  <widget class="QGroupBox" name="gb_netStatusBox">
                   <property name="title">
@@ -2349,6 +2349,13 @@
                  <widget class="QCheckBox" name="derive_mac_from_psid">
                   <property name="text">
                    <string>Derive ethernet address from PSID</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QCheckBox" name="psas_connector_mode">
+                  <property name="text">
+                   <string>ASBR connector mode</string>
                   </property>
                  </widget>
                 </item>

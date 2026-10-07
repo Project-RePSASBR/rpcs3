@@ -227,6 +227,7 @@ const std::map<emu_settings_type, cfg_location> settings_location =
 	{ emu_settings_type::DeriveMacFromPsid, get_cfg_location(local_cfg.net.derive_mac_from_psid) },
 	{ emu_settings_type::PSNCountry,     get_cfg_location(local_cfg.net.country) },
 	{ emu_settings_type::EnableClans,    get_cfg_location(local_cfg.net.clans_enabled) },
+	{ emu_settings_type::PSASConnectorMode, get_cfg_location(local_cfg.net.psas_connector_mode) },
 
 	// System
 	{ emu_settings_type::LicenseArea,           get_cfg_location(local_cfg.sys.license_area) },

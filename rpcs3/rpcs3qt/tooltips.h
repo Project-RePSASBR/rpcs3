@@ -274,6 +274,7 @@ public:
 		const QString derive_mac_from_psid = tr("Derive the MAC address from the PSID.");
 		const QString psn_country   = tr("Changes the RPCN country.");
 		const QString enable_clans  = tr("Enable connection to the Clans server.\nOnly affects games supporting the Clans feature.");
+		const QString psas_connector_mode = tr("For PlayStation All-Stars Battle Royale (retail title ids only), RPCS3 binds the game's sockets to 127.0.0.1 and forwards its broadcasts to the All-Stars Matchmaker connector on 127.0.0.1:4000, overriding Bind address and P2P Broadcast Forward.\nTurn it off only to play on a real LAN with consoles without the connector.\nOther games are not affected.");
 
 		// system
 

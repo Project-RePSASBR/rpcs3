@@ -1356,6 +1356,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	EnhanceCheckBox(emu_settings_type::EnableUpnp, ui->enable_upnp, tooltips.settings.enable_upnp);
 	EnhanceCheckBox(emu_settings_type::DeriveMacFromPsid, ui->derive_mac_from_psid, tooltips.settings.derive_mac_from_psid);
 	EnhanceCheckBox(emu_settings_type::EnableClans, ui->enable_clans, tooltips.settings.enable_clans);
+	EnhanceCheckBox(emu_settings_type::PSASConnectorMode, ui->psas_connector_mode, tooltips.settings.psas_connector_mode);
 
 	// Comboboxes
 

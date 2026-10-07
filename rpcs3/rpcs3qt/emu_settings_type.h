@@ -218,6 +218,7 @@ enum class emu_settings_type
 	DeriveMacFromPsid,
 	PSNCountry,
 	EnableClans,
+	PSASConnectorMode,
 
 	// System
 	LicenseArea,
