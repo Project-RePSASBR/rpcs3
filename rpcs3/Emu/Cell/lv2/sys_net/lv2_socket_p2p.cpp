@@ -418,7 +418,8 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 	const bool is_psas_payload      = sys_net_helpers::is_psas_lan_beacon_payload(buf.data(), buf.size());
 	const bool is_psas_wire_beacon  = sys_net_helpers::is_psas_lan_beacon(buf.data(), buf.size());
 	const bool has_psas_raw_header  = buf.size() >= 2 && buf[0] == 0xFF && buf[1] == 0x83;
-	const bool use_raw_psas_frame  = is_psas_payload || is_psas_wire_beacon || (psas_mode_enabled && (has_psas_raw_header || (local_vport == 1000 && p2p_vport == 1000)));
+	const bool psas_title_gate     = sys_net_helpers::is_psas_title_gate_matched();
+	const bool use_raw_psas_frame  = psas_title_gate || is_psas_payload || is_psas_wire_beacon || (psas_mode_enabled && (has_psas_raw_header || (local_vport == 1000 && p2p_vport == 1000)));
 
 	if (use_raw_psas_frame)
 	{

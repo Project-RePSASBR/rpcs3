@@ -128,8 +128,13 @@ namespace sys_net_helpers
 nt_p2p_port::nt_p2p_port(u16 port)
 	: port(port)
 {
-	// Reset the detection for PSASBR in each new P2P port lifecycle
-	s_psas_lan_mode_enabled.store(false, std::memory_order_relaxed);
+	const bool psas_title = sys_net_helpers::is_psas_title_gate_matched();
+	s_psas_lan_mode_enabled.store(psas_title, std::memory_order_relaxed);
+
+	if (psas_title)
+	{
+		sys_net.notice("PSASBR retail title %s: P2P port %d uses the raw 0xFF83 console framing", Emu.GetTitleID(), port);
+	}
 
 	const bool is_ipv6 = np::is_ipv6_supported();
 
