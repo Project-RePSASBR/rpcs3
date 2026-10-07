@@ -5,6 +5,7 @@
 #include "lv2_socket.h"
 #include "sys_net_helpers.h"
 #include "network_context.h"
+#include "psas_connector.h"
 
 #ifdef _WIN32
 #include "Emu/NP/np_handler.h"
@@ -219,7 +220,10 @@ void clear_ppu_to_awake(ppu_thread& ppu)
 be_t<u32> resolve_binding_ip()
 {
 	in_addr conv{};
-	const std::string cfg_bind_addr = g_cfg.net.bind_address.to_string();
+
+	// ASBR connector mode: PSASBR retail titles always bind to loopback (exactly what a per-game
+	// "Bind address: 127.0.0.1" does), whatever the stored setting says; stock behaviour otherwise
+	const std::string cfg_bind_addr = sys_net_helpers::psas_connector_mode_active() ? std::string("127.0.0.1") : g_cfg.net.bind_address.to_string();
 
 	if (cfg_bind_addr == "0.0.0.0" || cfg_bind_addr == "")
 	{

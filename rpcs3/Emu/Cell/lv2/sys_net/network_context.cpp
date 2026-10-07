@@ -5,6 +5,13 @@
 
 #include "network_context.h"
 #include "sys_net_helpers.h"
+#include "psas_connector.h"
+#include "Emu/System.h"
+#include "Emu/system_config.h"
+#include "Emu/NP/np_helpers.h"
+#include "rpcs3_version.h"
+
+#include <charconv>
 
 LOG_CHANNEL(sys_net);
 
@@ -327,4 +334,212 @@ void p2p_thread::operator()()
 			sys_net.error("[P2P] Error poll on master P2P socket: %d", get_last_error(false));
 		}
 	}
+}
+
+// --------- ASBR CONNECTOR MODE: hello datagram sender (see psas_connector.h)
+
+namespace
+{
+	// Hello targets: every valid "P2P Broadcast Forward" entry (same "ip:port,ip:port" rules as the broadcast
+	// forward in lv2_socket_p2p::sendto), plus the connector on 127.0.0.1:4000 when connector mode is active
+	// (it is a forward target then) or when nothing is configured (stock config, opt-out). Duplicates are dropped.
+	std::vector<::sockaddr_in> get_psas_hello_targets(bool connector_mode, bool& forward_configured)
+	{
+		std::vector<::sockaddr_in> targets;
+
+		const auto add_target = [&](u32 addr, u16 port)
+		{
+			for (const ::sockaddr_in& target : targets)
+			{
+				if (target.sin_addr.s_addr == addr && target.sin_port == port)
+				{
+					return;
+				}
+			}
+
+			::sockaddr_in target{};
+			target.sin_family = AF_INET;
+			target.sin_addr.s_addr = addr;
+			target.sin_port = port;
+			targets.push_back(target);
+		};
+
+		const std::string cfg_fwd = g_cfg.net.p2p_broadcast_forward.to_string();
+
+		for (usz start = 0; start < cfg_fwd.size();)
+		{
+			usz end = cfg_fwd.find(',', start);
+
+			if (end == std::string::npos)
+			{
+				end = cfg_fwd.size();
+			}
+
+			std::string entry = cfg_fwd.substr(start, end - start);
+			start = end + 1;
+
+			while (!entry.empty() && entry.front() == ' ')
+			{
+				entry.erase(entry.begin());
+			}
+
+			while (!entry.empty() && entry.back() == ' ')
+			{
+				entry.pop_back();
+			}
+
+			const usz sep = entry.rfind(':');
+			u16 fwd_port = 0;
+			::in_addr fwd_ip{};
+
+			const bool valid = sep != std::string::npos && sep != 0 && sep + 1 < entry.size() &&
+				std::from_chars(entry.c_str() + sep + 1, entry.c_str() + entry.size(), fwd_port).ec == std::errc() &&
+				inet_pton(AF_INET, entry.substr(0, sep).c_str(), &fwd_ip) == 1;
+
+			if (valid)
+			{
+				add_target(fwd_ip.s_addr, std::bit_cast<u16, be_t<u16>>(fwd_port));
+			}
+		}
+
+		forward_configured = !targets.empty();
+
+		if (connector_mode || targets.empty())
+		{
+			add_target(std::bit_cast<u32, be_t<u32>>(0x7F000001), std::bit_cast<u16, be_t<u16>>(sys_net_helpers::PSAS_CONNECTOR_PORT));
+		}
+
+		return targets;
+	}
+
+	std::string psas_hello_target_to_string(const ::sockaddr_in& target)
+	{
+		const u16 port = std::bit_cast<be_t<u16>, u16>(target.sin_port);
+		return fmt::format("%s:%d", np::ip_to_string(target.sin_addr.s_addr), port);
+	}
+} // namespace
+
+psas_connector_hello_thread::psas_connector_hello_thread(std::string title_id)
+	: m_title_id(std::move(title_id))
+{
+}
+
+void psas_connector_hello_thread::operator()()
+{
+	// Both settings are fixed for the whole emulation run (not dynamic)
+	const bool connector_mode = g_cfg.net.psas_connector_mode.get();
+	bool forward_configured = false;
+	const std::vector<::sockaddr_in> targets = get_psas_hello_targets(connector_mode, forward_configured);
+	const std::string fork_version = sys_net_helpers::compose_psas_fork_version(rpcs3::get_version().to_string());
+
+	const socket_type hello_socket = ::socket(AF_INET, SOCK_DGRAM, 0);
+
+#ifdef _WIN32
+	if (hello_socket == INVALID_SOCKET)
+#else
+	if (hello_socket == -1)
+#endif
+	{
+		sys_net.error("ASBR connector mode: failed to create the hello socket (native error %d), the connector will only see the game traffic", get_native_error());
+		return;
+	}
+
+	np::set_socket_non_blocking(hello_socket);
+
+#ifdef _WIN32
+	// Same as the P2P port: a hello sent while the connector is not running bounces with ICMP port-unreachable,
+	// which Windows would otherwise report as WSAECONNRESET on the next sendto
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+	{
+		BOOL new_behaviour   = FALSE;
+		DWORD bytes_returned = 0;
+		if (WSAIoctl(hello_socket, SIO_UDP_CONNRESET, &new_behaviour, sizeof(new_behaviour), nullptr, 0, &bytes_returned, nullptr, nullptr) != 0)
+			sys_net.warning("ASBR connector mode: failed to disable SIO_UDP_CONNRESET on the hello socket (native error %d)", get_native_error());
+	}
+#endif
+
+	bool logged_first = false;
+	bool logged_send_error = false;
+
+	while (thread_ctrl::state() != thread_state::aborting)
+	{
+		const u16 bound_port = sys_net_helpers::get_psas_connector_bound_port();
+
+		u8 flags = sys_net_helpers::PSAS_HELLO_FLAG_TITLE_GATE;
+
+		if (bound_port)
+		{
+			flags |= sys_net_helpers::PSAS_HELLO_FLAG_LOOPBACK_BIND;
+		}
+
+		if (connector_mode || forward_configured)
+		{
+			flags |= sys_net_helpers::PSAS_HELLO_FLAG_FORWARD;
+		}
+
+		if (!connector_mode)
+		{
+			flags |= sys_net_helpers::PSAS_HELLO_FLAG_OPT_OUT;
+		}
+
+		const std::string bound_addr = bound_port ? fmt::format("127.0.0.1:%d", bound_port) : std::string();
+
+		const std::vector<u8> datagram = sys_net_helpers::encode_psas_connector_hello({
+			.flags = flags,
+			.interval_ms = sys_net_helpers::PSAS_HELLO_INTERVAL_MS,
+			.fork_version = fork_version,
+			.title_id = m_title_id,
+			.bound_addr = bound_addr,
+		});
+
+		if (!std::exchange(logged_first, true))
+		{
+			// Self-check: the exact bytes of the first hello, to compare with the connector's log
+			std::string targets_str;
+			std::string datagram_hex;
+
+			for (const ::sockaddr_in& target : targets)
+			{
+				fmt::append(targets_str, "%s%s", targets_str.empty() ? "" : ", ", psas_hello_target_to_string(target));
+			}
+
+			for (const u8 byte : datagram)
+			{
+				fmt::append(datagram_hex, "%s%02x", datagram_hex.empty() ? "" : " ", byte);
+			}
+
+			sys_net.notice("ASBR connector mode %s (%s): hello from '%s' every %d ms to %s, first datagram (%d bytes): %s",
+				connector_mode ? "on" : "off (opt-out)", m_title_id, fork_version, sys_net_helpers::PSAS_HELLO_INTERVAL_MS, targets_str, datagram.size(), datagram_hex);
+		}
+
+		for (const ::sockaddr_in& target : targets)
+		{
+			if (::sendto(hello_socket, reinterpret_cast<const char*>(datagram.data()), ::size32(datagram), 0, reinterpret_cast<const ::sockaddr*>(&target), sizeof(target)) < 0)
+			{
+				const int native_error = get_native_error();
+
+				if (!std::exchange(logged_send_error, true))
+				{
+					sys_net.error("ASBR connector mode: failed to send the hello datagram to %s (native error %d), further hello errors are not logged",
+						psas_hello_target_to_string(target), native_error);
+				}
+			}
+		}
+
+		thread_ctrl::wait_for(sys_net_helpers::PSAS_HELLO_INTERVAL_MS * 1000ull);
+	}
+
+	np::close_socket(hello_socket);
+}
+
+void init_psas_connector_hello()
+{
+	if (!sys_net_helpers::is_psas_title_gate_matched())
+	{
+		return;
+	}
+
+	g_fxo->init<psas_connector_hello_context>(Emu.GetTitleID());
 }

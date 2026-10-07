@@ -8,6 +8,10 @@
 #include "Emu/NP/vport0.h"
 #include "Emu/NP/np_handler.h"
 #include "Emu/NP/np_helpers.h"
+#include "Emu/Cell/Modules/sceNp.h" // for SCE_NP_PORT
+#include "Emu/System.h"
+#include "Emu/system_config.h"
+#include "psas_connector.h"
 #include <atomic>
 
 LOG_CHANNEL(sys_net);
@@ -15,6 +19,9 @@ LOG_CHANNEL(sys_net);
 namespace
 {
 	std::atomic<bool> s_psas_lan_mode_enabled = false;
+
+	// ASBR connector mode: game P2P port bound to 127.0.0.1 (0 = none), reported by the hello datagram
+	std::atomic<u16> s_psas_connector_bound_port = 0;
 
 	bool is_psas_lan_beacon_impl(const u8* data, usz size)
 	{
@@ -101,6 +108,21 @@ namespace sys_net_helpers
 			sys_net.notice("Detected PSASBR P2P traffic");
 		}
 	}
+
+	bool is_psas_title_gate_matched()
+	{
+		return is_psas_retail_title(Emu.GetTitleID());
+	}
+
+	bool psas_connector_mode_active()
+	{
+		return g_cfg.net.psas_connector_mode.get() && is_psas_title_gate_matched();
+	}
+
+	u16 get_psas_connector_bound_port()
+	{
+		return s_psas_connector_bound_port.load();
+	}
 } // namespace sys_net_helpers
 
 nt_p2p_port::nt_p2p_port(u16 port)
@@ -181,10 +203,45 @@ nt_p2p_port::nt_p2p_port(u16 port)
 
 	nph.upnp_add_port_mapping(port, "UDP");
 	sys_net.notice("P2P port %d was bound!", port);
+
+	// --------- ASBR CONNECTOR MODE: the loopback bind itself comes from resolve_binding_ip()
+	if (sys_net_helpers::psas_connector_mode_active())
+	{
+		::sockaddr_storage bound_addr{};
+		::socklen_t bound_addrlen = sizeof(bound_addr);
+
+		const bool is_loopback = ::getsockname(p2p_socket, reinterpret_cast<sockaddr*>(&bound_addr), &bound_addrlen) == 0 && bound_addr.ss_family == AF_INET &&
+			reinterpret_cast<const ::sockaddr_in*>(&bound_addr)->sin_addr.s_addr == std::bit_cast<u32, be_t<u32>>(0x7F000001);
+
+		if (is_loopback)
+		{
+			if (port == SCE_NP_PORT)
+			{
+				s_psas_connector_bound_port.store(port);
+			}
+			else
+			{
+				u16 no_port = 0;
+				s_psas_connector_bound_port.compare_exchange_strong(no_port, port);
+			}
+
+			sys_net.notice("ASBR connector mode (%s): P2P port bound to 127.0.0.1:%d (configured Bind address '%s' ignored), broadcasts forwarded to 127.0.0.1:%d",
+				Emu.GetTitleID(), port, g_cfg.net.bind_address.to_string(), sys_net_helpers::PSAS_CONNECTOR_PORT);
+		}
+		else
+		{
+			sys_net.warning("ASBR connector mode (%s): P2P port %d is not bound to 127.0.0.1 (%s), the All-Stars Matchmaker connector cannot reach the game",
+				Emu.GetTitleID(), port, is_ipv6 ? "IPv6 socket" : nph.get_bind_ip() ? "loopback bind failed" : "Network Status is not Connected");
+		}
+	} // --------- END OF ASBR CONNECTOR MODE
 }
 
 nt_p2p_port::~nt_p2p_port()
 {
+	// ASBR connector mode: this port no longer carries the game traffic
+	u16 this_port = port;
+	s_psas_connector_bound_port.compare_exchange_strong(this_port, 0);
+
 	np::close_socket(p2p_socket);
 }
 

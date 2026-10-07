@@ -336,6 +336,7 @@ struct cfg_root : cfg::node
 		cfg::_bool upnp_enabled{this, "UPNP Enabled", false};
 		cfg::_bool derive_mac_from_psid{this, "Derive MAC from PSID", false};
 		cfg::string p2p_broadcast_forward{this, "P2P Broadcast Forward", ""};
+		cfg::_bool psas_connector_mode{this, "PSAS Connector Mode", true}; // ASBR retail titles: loopback bind + forward to the All-Stars Matchmaker connector (sys_net/psas_connector.h)
 
 		cfg::_enum<np_psn_status> psn_status{this, "PSN status", np_psn_status::disabled};
 		cfg::string country{this, "PSN Country", "us"};

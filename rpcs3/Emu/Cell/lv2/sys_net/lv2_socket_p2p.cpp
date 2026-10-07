@@ -5,6 +5,7 @@
 #include "Emu/NP/np_helpers.h"
 #include "network_context.h"
 #include "sys_net_helpers.h"
+#include "psas_connector.h"
 
 #include <charconv>
 
@@ -317,6 +318,7 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 	// Forward unicast copies of broadcast P2P datagrams to the endpoints configured in
 	// "P2P Broadcast Forward" ("ip:port,ip:port"). This lets an external relay/gateway
 	// receive lobby beacons without sharing a broadcast domain with the emulator.
+	// ASBR connector mode adds the All-Stars Matchmaker connector (127.0.0.1:4000) to that list.
 	const bool is_broadcast_send = native_addr.sin_addr.s_addr == INADDR_BROADCAST;
 	const auto forward_broadcast_copies = [&](const void* data, u32 size)
 	{
@@ -326,8 +328,11 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 		}
 
 		const std::string cfg_fwd = g_cfg.net.p2p_broadcast_forward.to_string();
+		const bool psas_connector = sys_net_helpers::psas_connector_mode_active();
+		const u32 psas_connector_ip = std::bit_cast<u32, be_t<u32>>(0x7F000001);
+		bool psas_connector_listed = false;
 
-		if (cfg_fwd.empty())
+		if (cfg_fwd.empty() && !psas_connector)
 		{
 			return;
 		}
@@ -374,10 +379,31 @@ std::optional<s32> lv2_socket_p2p::sendto(s32 flags, const std::vector<u8>& buf,
 
 			fwd_addr.sin_port = std::bit_cast<u16, be_t<u16>>(fwd_port);
 
+			if (psas_connector && fwd_addr.sin_addr.s_addr == psas_connector_ip && fwd_port == sys_net_helpers::PSAS_CONNECTOR_PORT)
+			{
+				// Already configured (e.g. by the old desktop toggle): never send the connector two copies
+				psas_connector_listed = true;
+			}
+
 			static bool s_logged_fwd = false;
 			if (!std::exchange(s_logged_fwd, true))
 			{
 				sys_net.notice("P2P Broadcast Forward active, first copy sent to %s", entry);
+			}
+
+			np::sendto_possibly_ipv6(native_socket, static_cast<const char*>(data), size, &fwd_addr, native_flags);
+		}
+
+		if (psas_connector && !psas_connector_listed)
+		{
+			auto fwd_addr = native_addr;
+			fwd_addr.sin_addr.s_addr = psas_connector_ip;
+			fwd_addr.sin_port = std::bit_cast<u16, be_t<u16>>(sys_net_helpers::PSAS_CONNECTOR_PORT);
+
+			static bool s_logged_psas_fwd = false;
+			if (!std::exchange(s_logged_psas_fwd, true))
+			{
+				sys_net.notice("ASBR connector mode: first broadcast copy sent to 127.0.0.1:%d", sys_net_helpers::PSAS_CONNECTOR_PORT);
 			}
 
 			np::sendto_possibly_ipv6(native_socket, static_cast<const char*>(data), size, &fwd_addr, native_flags);

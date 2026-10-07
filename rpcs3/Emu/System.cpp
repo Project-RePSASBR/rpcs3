@@ -260,6 +260,15 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 
 	g_emu_callbacks.init_pad_handler(Emu.GetTitleID());
 
+	if (!full)
+	{
+		// ASBR connector mode: hello datagram sender while a PSASBR retail title runs (no-op for other titles).
+		// full == false only for executable boots (ppu_load_exec, fresh or from a savestate), never for the PPU
+		// cache precompilation or the state inspection modes. Stopped by the fxo reset in Kill().
+		void init_psas_connector_hello();
+		init_psas_connector_hello();
+	}
+
 	usz pos = 0;
 
 	if (ar)
