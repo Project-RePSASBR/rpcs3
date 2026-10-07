@@ -52,6 +52,7 @@ enum class emu_settings_type
 	DisableSpinOptimization,
 	EnabledSPUEventsBusyLoop,
 	PPUReservationPriorityOverSPUs,
+	AccurateSpuReservations,
 
 	// Graphics
 	Renderer,
@@ -178,6 +179,7 @@ enum class emu_settings_type
 	Buzz,
 	Turntable,
 	GHLtar,
+	USIO,
 	MidiDevices,
 	SDLMappings,
 	MouseBasedGyro,
@@ -228,12 +230,16 @@ enum class emu_settings_type
 	DateFormat,
 	TimeFormat,
 	ConsoleTimeOffset,
+	HDDModelName,
+	HDDSerialNumber,
 
 	// VFS
 	EnableHostRoot,
 	EmptyHdd0Tmp,
 	LimitCacheSize,
 	MaximumCacheSize,
+	EmulateHddSpeed,
+	EmulateBdvdSpeed,
 
 	// Log
 	Log,

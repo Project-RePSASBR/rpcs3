@@ -148,6 +148,7 @@ nt_p2p_port::nt_p2p_port(u16 port)
 		fmt::throw_exception("Failed to create DGRAM socket for P2P socket: %s!", get_last_error(true));
 
 	np::set_socket_non_blocking(p2p_socket);
+	np::set_dgram_socket_disable_connreset(p2p_socket);
 
 #ifdef _WIN32
 	// Windows queues an error on a UDP socket when one of OUR earlier sends
