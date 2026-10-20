@@ -101,8 +101,6 @@ void ps_move_tracker<DiagnosticsEnabled>::ps_move_config::calculate_values()
 	{
 		min_hue %= 360;
 	}
-
-	saturation_threshold = saturation_threshold_u8 / 255.0f;
 }
 
 template <bool DiagnosticsEnabled>
@@ -213,6 +211,7 @@ void ps_move_tracker<DiagnosticsEnabled>::process_image()
 			ps_move_info& info = m_info[index];
 			info.valid = false;
 			m_fail_count[index] = 0;
+			m_shape_fail_count[index] = 0;
 		}
 	}
 
@@ -334,6 +333,9 @@ void ps_move_tracker<DiagnosticsEnabled>::draw_sphere_size_range(f32 result_radi
 	if constexpr (!DiagnosticsEnabled) return;
 	if (!m_draw_overlays) return;
 
+	// Protect the destination image from race conditions
+	std::lock_guard lock(m_mutex);
+
 	// Map memory
 	cv::Mat rgba(cv::Size(m_width, m_height), CV_8UC4, m_image_rgba_contours.data(), 0);
 
@@ -373,6 +375,7 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 	std::vector<u8>& image_binary = ::at32(m_image_binary, index);
 
 	const bool wrapped_hue = config.min_hue > config.max_hue; // e.g. min=355, max=5 (red)
+	const bool has_hue_threshold = config.hue_threshold < 180; // with hue threshold 180 min and max are the same value
 
 	// Map memory
 	cv::Mat binary(cv::Size(width, height), CV_8UC1, image_binary.data(), 0);
@@ -390,7 +393,7 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 			const u8 value = src[2];
 
 			// Simply drop dark and colorless pixels as well as pixels that don't match our hue
-			if ((wrapped_hue ? (hue < config.min_hue && hue > config.max_hue) : (hue < config.min_hue || hue > config.max_hue)) ||
+			if ((has_hue_threshold && (wrapped_hue ? (hue < config.min_hue && hue > config.max_hue) : (hue < config.min_hue || hue > config.max_hue))) ||
 				saturation < config.saturation_threshold_u8 || saturation > 200 ||
 				value < 150)
 			{
@@ -513,9 +516,6 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 	const f32 focal_length_pixels = (focal_length_mm * image_width_pixels) / sensor_width_mm;
 	const f32 distance_mm = (focal_length_pixels * CELL_GEM_SPHERE_RADIUS_MM) / sphere_radius_pixels;
 
-	// Set results
-	set_valid(info, index, true);
-
 	const u32 x_pos = std::clamp(static_cast<u32>(best_center.x), 0u, width);
 	const u32 y_pos = std::clamp(static_cast<u32>(best_center.y), 0u, height);
 
@@ -530,8 +530,9 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 	const f32 max_distance_squared = max_distance * max_distance;
 	const bool shape_matches = std::abs(info.radius - sphere_radius_pixels) < (info.radius * 2) &&
 	                           distance_squared(static_cast<s32>(info.x_pos * width), static_cast<s32>(info.y_pos * height), x_pos, y_pos) < max_distance_squared;
+	const bool reacquired = !info.valid || info.radius <= 0.0f;
 
-	if (shape_matches || ++m_shape_fail_count[index] >= 3)
+	if (reacquired || shape_matches || ++m_shape_fail_count[index] >= 3)
 	{
 		info.distance_mm = distance_mm;
 		info.radius = sphere_radius_pixels;
@@ -541,6 +542,8 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 		m_shape_fail_count[index] = 0; // Reset fail count
 	}
 
+	set_valid(info, index, true);
+
 	if constexpr (!DiagnosticsEnabled)
 		return;
 
@@ -548,6 +551,9 @@ void ps_move_tracker<DiagnosticsEnabled>::process_contours(ps_move_info& info, u
 		return;
 
 	draw_sphere_size_range(info.radius);
+
+	// Protect the destination image from race conditions
+	std::lock_guard lock(m_mutex);
 
 	// Map memory
 	cv::Mat rgba(cv::Size(width, height), CV_8UC4, m_image_rgba_contours.data(), 0);

@@ -67,7 +67,6 @@ private:
 
 		s16 min_hue = 0;
 		s16 max_hue = 0;
-		f32 saturation_threshold = 0.0f;
 
 		void calculate_values();
 	};
@@ -88,6 +87,8 @@ private:
 	bool m_show_all_contours = false;
 	bool m_draw_contours = false;
 	bool m_draw_overlays = false;
+
+	std::mutex m_mutex;
 
 	std::vector<u8> m_image_data;
 	std::vector<u8> m_image_rgba;

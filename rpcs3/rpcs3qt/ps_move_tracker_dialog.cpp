@@ -80,7 +80,7 @@ ps_move_tracker_dialog::ps_move_tracker_dialog(QWidget* parent)
 	ui->viewCombo->addItem(tr("HSV Value"), static_cast<int>(view_mode::hsv_value));
 	ui->viewCombo->addItem(tr("Binary"), static_cast<int>(view_mode::binary));
 	ui->viewCombo->addItem(tr("Contours"), static_cast<int>(view_mode::contours));
-	ui->viewCombo->setCurrentIndex(ui->viewCombo->findData(static_cast<int>(m_view_mode)));
+	ui->viewCombo->setCurrentIndex(ui->viewCombo->findData(static_cast<int>(m_view_mode.load())));
 
 	connect(ui->viewCombo, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
@@ -92,7 +92,7 @@ ps_move_tracker_dialog::ps_move_tracker_dialog(QWidget* parent)
 	});
 
 	ui->histoCombo->addItem(tr("Hues"), static_cast<int>(histo_mode::unfiltered_hues));
-	ui->histoCombo->setCurrentIndex(ui->viewCombo->findData(static_cast<int>(m_histo_mode)));
+	ui->histoCombo->setCurrentIndex(ui->histoCombo->findData(static_cast<int>(m_histo_mode)));
 
 	connect(ui->histoCombo, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
@@ -210,7 +210,7 @@ ps_move_tracker_dialog::ps_move_tracker_dialog(QWidget* parent)
 	{
 		ui->comboSelectDevice->addItem(tr("PS Move #%0").arg(index + 1), index);
 	}
-	ui->comboSelectDevice->setCurrentIndex(ui->comboSelectDevice->findData(m_index));
+	ui->comboSelectDevice->setCurrentIndex(ui->comboSelectDevice->findData(m_index.load()));
 
 	connect(ui->comboSelectDevice, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
@@ -233,11 +233,22 @@ ps_move_tracker_dialog::ps_move_tracker_dialog(QWidget* parent)
 	{
 		std::lock_guard lock(m_image_mutex);
 
-		if (m_image.isNull() || m_histogram.isNull())
+		if (m_image.isNull())
 			return;
 
-		ui->imageLabel->setPixmap(m_image);
-		ui->histogramLabel->setPixmap(m_histogram);
+		QPixmap histogram;
+
+		switch (m_histo_mode)
+		{
+		case histo_mode::unfiltered_hues:
+		{
+			histogram = get_histogram(false, width);
+			break;
+		}
+		}
+
+		ui->imageLabel->setPixmap(QPixmap::fromImage(m_image));
+		ui->histogramLabel->setPixmap(histogram);
 	});
 
 	reset_camera();
@@ -335,7 +346,7 @@ bool ps_move_tracker_dialog::eventFilter(QObject* object, QEvent* event)
 				g /= count;
 				b /= count;
 
-				ps_move.notice("Selected new color with mouse click (r=%f, b=%f, g=%f)", r, g, b);
+				ps_move.notice("Selected new color with mouse click (r=%f, g=%f, b=%f)", r, g, b);
 
 				cfg_ps_move* config = ::at32(g_cfg_move.move, m_index);
 				const auto [hue, saturation, value] = ps_move_tracker<true>::rgb_to_hsv(r, g, b);
@@ -531,9 +542,11 @@ void ps_move_tracker_dialog::process_camera_frame()
 
 	m_frame_number = frame_number;
 
-	if (m_frame_frozen != m_freeze_frame)
+	const bool freeze_frame = m_freeze_frame;
+
+	if (m_frame_frozen != freeze_frame)
 	{
-		m_frame_frozen = m_freeze_frame;
+		m_frame_frozen = freeze_frame;
 
 		if (m_frame_frozen)
 		{
@@ -541,14 +554,16 @@ void ps_move_tracker_dialog::process_camera_frame()
 		}
 	}
 
-	for (u32 index = 0; index < CELL_GEM_MAX_NUM; index++)
-	{
-		const cfg_ps_move* config = g_cfg_move.move[index];
+	const u32 index = m_index;
 
-		m_ps_move_tracker->set_active(index, m_index == index);
-		m_ps_move_tracker->set_hue(index, config->hue);
-		m_ps_move_tracker->set_hue_threshold(index, config->hue_threshold);
-		m_ps_move_tracker->set_saturation_threshold(index, config->saturation_threshold);
+	for (u32 i = 0; i < CELL_GEM_MAX_NUM; i++)
+	{
+		const cfg_ps_move* config = g_cfg_move.move[i];
+
+		m_ps_move_tracker->set_active(i, index == i);
+		m_ps_move_tracker->set_hue(i, config->hue);
+		m_ps_move_tracker->set_hue_threshold(i, config->hue_threshold);
+		m_ps_move_tracker->set_saturation_threshold(i, config->saturation_threshold);
 	}
 
 	m_ps_move_tracker->set_image_data(m_frame_frozen ? m_image_data_frozen.data() : m_image_data.data(), m_image_data.size(), width, height, m_camera_handler->format());
@@ -563,8 +578,9 @@ void ps_move_tracker_dialog::process_camera_frame()
 	const std::vector<u8>* result = nullptr;
 	QImage::Format format = QImage::Format::Format_Invalid;
 	qsizetype bytes_per_line = 0;
+	const view_mode _view_mode = m_view_mode;
 
-	switch (m_view_mode)
+	switch (_view_mode)
 	{
 	case view_mode::image:
 	{
@@ -584,13 +600,13 @@ void ps_move_tracker_dialog::process_camera_frame()
 	case view_mode::hsv_saturation:
 	case view_mode::hsv_value:
 	{
-		const u32 index = static_cast<u32>(m_view_mode) - static_cast<u32>(view_mode::hsv_hue);
+		const u32 value_index = static_cast<u32>(_view_mode) - static_cast<u32>(view_mode::hsv_hue);
 		const std::vector<u8>& hsv = m_ps_move_tracker->hsv();
 		static std::vector<u8> hsv_single;
 		hsv_single.resize(hsv.size() / 3);
 		for (usz i = 0; i < hsv_single.size(); i++)
 		{
-			hsv_single[i] = hsv[i * 3 + index];
+			hsv_single[i] = hsv[i * 3 + value_index];
 		}
 		result = &hsv_single;
 		format = QImage::Format::Format_Grayscale8;
@@ -599,7 +615,7 @@ void ps_move_tracker_dialog::process_camera_frame()
 	}
 	case view_mode::binary:
 	{
-		result = &m_ps_move_tracker->binary(m_index);
+		result = &m_ps_move_tracker->binary(index);
 		format = QImage::Format::Format_Grayscale8;
 		bytes_per_line = width;
 		break;
@@ -613,41 +629,22 @@ void ps_move_tracker_dialog::process_camera_frame()
 	}
 	}
 
-	QPixmap histogram;
-
-	switch (m_histo_mode)
-	{
-	case histo_mode::unfiltered_hues:
-	{
-		histogram = get_histogram(m_ps_move_tracker->hues(), false);
-		break;
-	}
-	}
-
-	const QImage image(result->data(), width, height, bytes_per_line, format, nullptr, nullptr);
+	QImage image = QImage(result->data(), width, height, bytes_per_line, format, nullptr, nullptr).copy();
 
 	std::lock_guard lock(m_image_mutex);
-	m_image = QPixmap::fromImage(image);
-	m_histogram = std::move(histogram);
+	m_image = std::move(image);
+	m_hues = m_ps_move_tracker->hues();
 }
 
-QPixmap ps_move_tracker_dialog::get_histogram(const std::array<u32, 360>& hues, bool ignore_zero) const
+QPixmap ps_move_tracker_dialog::get_histogram(bool ignore_zero, int width) const
 {
 	// Create image
-	const int width = ui->histogramLabel->width();
 	const int height = ui->histogramLabel->height();
-	const f32 pixelsPerHue = width / static_cast<f32>(hues.size());
+	const f32 pixelsPerHue = width / static_cast<f32>(m_hues.size());
 
-	static QPixmap background = [&]()
-	{
-		// Paint background
-		QPixmap pxmap(width, height);
-		pxmap.fill(Qt::white);
-		return pxmap;
-	}();
-
-	QPixmap histo = background;
-	QPainter painter(&histo);
+	// Paint background
+	QPixmap histo(width, height);
+	histo.fill(Qt::white);
 
 	const cfg_ps_move* config = ::at32(g_cfg_move.move, m_index);
 	const u16 hue = config->hue;
@@ -656,15 +653,18 @@ QPixmap ps_move_tracker_dialog::get_histogram(const std::array<u32, 360>& hues, 
 	const int max_hue = hue + hue_threshold;
 
 	// Paint hue threshold
-	painter.fillRect(min_hue, 0, hue_threshold * 2 + 1, histo.height(), Qt::lightGray);
+	QPainter painter(&histo);
+
+	const int hue_threshold_width = (hue_threshold * 2 + 1) * pixelsPerHue;
+	painter.fillRect(min_hue * pixelsPerHue, 0, hue_threshold_width, histo.height(), Qt::lightGray);
 
 	if (min_hue < 0)
 	{
-		painter.fillRect(min_hue + 360, 0, hue_threshold * 2 + 1, histo.height(), Qt::lightGray);
+		painter.fillRect((min_hue + 360) * pixelsPerHue, 0, hue_threshold_width, histo.height(), Qt::lightGray);
 	}
 	else if (max_hue >= 360)
 	{
-		painter.fillRect(0, 0, max_hue - 360, histo.height(), Qt::lightGray);
+		painter.fillRect(0, 0, (max_hue - 360 + 1) * pixelsPerHue, histo.height(), Qt::lightGray);
 	}
 
 	const auto get_hue_bar_x = [pixelsPerHue](u16 hue)
@@ -685,15 +685,15 @@ QPixmap ps_move_tracker_dialog::get_histogram(const std::array<u32, 360>& hues, 
 
 	const u32 zero_offset = (ignore_zero ? 1 : 0);
 
-	const auto max_elem = std::max_element(hues.begin() + zero_offset, hues.end());
-	const u32 max_value = max_elem != hues.end() ? *max_elem : 0u;
+	const auto max_elem = std::max_element(m_hues.begin() + zero_offset, m_hues.end());
+	const u32 max_value = max_elem != m_hues.end() ? *max_elem : 0u;
 
 	if (!max_value)
 		return histo;
 
-	for (int i = zero_offset; i < static_cast<int>(hues.size()); i++)
+	for (int i = zero_offset; i < static_cast<int>(m_hues.size()); i++)
 	{
-		const int bar_height = (hues[i] / static_cast<float>(max_value)) * height;
+		const int bar_height = (m_hues[i] / static_cast<float>(max_value)) * height;
 		if (bar_height <= 0) continue;
 
 		const auto [x0, x1] = get_hue_bar_x(i);
