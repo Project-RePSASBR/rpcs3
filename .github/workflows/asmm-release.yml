@@ -1,0 +1,117 @@
+name: ASMM Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_number:
+        description: "Release number (2 = tag RPCS3-ASMM-R2, title 'RPCS3 ASMM - Release 2')"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  Check:
+    name: Check release number
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      title: ${{ steps.check.outputs.title }}
+    steps:
+      - name: Validate the number and make sure the tag is free
+        id: check
+        env:
+          NUMBER: ${{ inputs.release_number }}
+        run: |
+          if ! [[ "$NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Release number must be digits only, got '$NUMBER'"
+            exit 1
+          fi
+
+          tag="RPCS3-ASMM-R${NUMBER}"
+
+          if [ -n "$(git ls-remote --tags "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "refs/tags/${tag}")" ]; then
+            echo "::error::Tag ${tag} already exists"
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "title=RPCS3 ASMM - Release ${NUMBER}" >> "$GITHUB_OUTPUT"
+
+  Build:
+    name: Build
+    needs: Check
+    uses: ./.github/workflows/rpcs3.yml
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+
+  Release:
+    name: Create draft release
+    needs: [Check, Build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@main
+        with:
+          pattern: RPCS3 for *
+          path: artifacts
+
+      - name: Collect the release variants
+        run: |
+          shopt -s nullglob
+          mkdir release
+
+          pick()
+          {
+            local files=("artifacts/$1"/$2)
+
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "::error::Expected exactly one $2 in '$1', found ${#files[@]}"
+              exit 1
+            fi
+
+            local name
+            name=$(basename "${files[0]}")
+            cp -- "${files[0]}" "release/rpcs3-ASBR-v${name#rpcs3-v}"
+          }
+
+          pick 'RPCS3 for Windows (MSVC)' '*_win64_msvc.7z'
+          pick 'RPCS3 for Windows (ARM64, clang)' '*_win64_aarch64_clang.7z'
+          pick 'RPCS3 for Linux (X64, clang)' '*_linux64.AppImage'
+          pick 'RPCS3 for Linux (ARM64, clang)' '*_linux_aarch64.AppImage'
+          pick 'RPCS3 for Mac (Intel)' '*_macos.7z'
+          pick 'RPCS3 for Mac (Apple Silicon)' '*_macos_aarch64.7z'
+
+          {
+            echo "Built from \`${GITHUB_SHA}\` (${GITHUB_REF_NAME}) by [this workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            echo "| File | SHA-256 |"
+            echo "|---|---|"
+
+            for file in release/*; do
+              hash=$(sha256sum "$file" | awk '{ print $1 }')
+              echo "$hash" > "$file.sha256"
+              echo "| $(basename "$file") | \`$hash\` |"
+            done
+          } > notes.md
+
+          ls -l release
+          cat notes.md
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.Check.outputs.tag }}
+          TITLE: ${{ needs.Check.outputs.title }}
+        run: |
+          gh release create "$TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file notes.md
