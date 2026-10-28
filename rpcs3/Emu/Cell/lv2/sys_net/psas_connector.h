@@ -10,6 +10,13 @@
 // network_context.cpp). The user can opt out with the "PSAS Connector Mode" setting (Network tab), which
 // restores stock networking; the hello is still sent, flagged as opt-out, so the connector can tell why it
 // sees no game traffic. Other titles are not affected in any way.
+// RPCN (revision 2): only the game's P2P port is pinned to loopback. The RPCN TCP connection keeps the configured
+// bind address (resolve_rpcn_binding_ip()), and because the RPCN UDP signaling ping/pong would have to travel
+// through that loopback-bound P2P port, it is skipped and the login no longer waits for it (np_handler). The
+// result is a working RPCN sign-in (online name, TSS) while the connector carries the LAN traffic; RPCN
+// signaling (NP matchmaking between emulators) is unavailable for these titles in connector mode.
+// Also revision 2: for these titles the local NpId gets reserved[0] = 1 like a real PSN NpId (np_handler::init_NP),
+// otherwise a real Vita's sceNpCmpNpId rejects the RPCS3 player's identity and its lobby re-adds the player forever.
 //
 // Design note: docs/emulator-detection.md in the connector repository (appendices "hello datagram wire
 // format (fork -> connector)" and "PSASBR title ids for the fork gate").
@@ -17,6 +24,7 @@
 #include "util/types.hpp"
 
 #include <array>
+#include <bit>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,7 +45,7 @@ namespace sys_net_helpers
 	// upstream RPCS3 and from older revisions of it. PSAS_FORK_REVISION is bumped BY HAND whenever the fork's
 	// connector-relevant behaviour changes (forced bind/forward rules, hello contents, P2P framing).
 	constexpr std::string_view PSAS_FORK_NAME = "rpsascs3";
-	constexpr u32 PSAS_FORK_REVISION = 1;
+	constexpr u32 PSAS_FORK_REVISION = 2;
 
 	enum PSAS_HELLO_FLAGS : u8
 	{
@@ -160,6 +168,14 @@ namespace sys_net_helpers
 
 		// Anything still too long is clamped at the end by encode_psas_connector_hello()
 		return prefix + std::string(upstream_version);
+	}
+
+	// RPCN TCP bind address in connector mode, from the configured one (both network byte order, as in_addr):
+	// a loopback address (a leftover per-game "Bind address: 127.0.0.1") could never reach the RPCN server and
+	// becomes 0.0.0.0, any other address is kept
+	constexpr u32 psas_rpcn_binding_ip(u32 configured_addr)
+	{
+		return std::bit_cast<std::array<u8, 4>>(configured_addr)[0] == 127 ? 0 : configured_addr;
 	}
 
 	// Runtime gate (nt_p2p_port.cpp)

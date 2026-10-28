@@ -219,11 +219,33 @@ void clear_ppu_to_awake(ppu_thread& ppu)
 
 be_t<u32> resolve_binding_ip()
 {
-	in_addr conv{};
-
 	// ASBR connector mode: PSASBR retail titles always bind to loopback (exactly what a per-game
 	// "Bind address: 127.0.0.1" does), whatever the stored setting says; stock behaviour otherwise
-	const std::string cfg_bind_addr = sys_net_helpers::psas_connector_mode_active() ? std::string("127.0.0.1") : g_cfg.net.bind_address.to_string();
+	if (sys_net_helpers::psas_connector_mode_active())
+	{
+		return std::bit_cast<u32, be_t<u32>>(0x7F000001);
+	}
+
+	return resolve_configured_binding_ip();
+}
+
+be_t<u32> resolve_rpcn_binding_ip()
+{
+	// ASBR connector mode: only the game's P2P port belongs on loopback; the RPCN TCP connection must reach the
+	// internet, so it keeps the configured address (a leftover per-game 127.x bind is dropped to 0.0.0.0)
+	if (sys_net_helpers::psas_connector_mode_active())
+	{
+		return sys_net_helpers::psas_rpcn_binding_ip(resolve_configured_binding_ip());
+	}
+
+	return resolve_binding_ip();
+}
+
+be_t<u32> resolve_configured_binding_ip()
+{
+	in_addr conv{};
+
+	const std::string cfg_bind_addr = g_cfg.net.bind_address.to_string();
 
 	if (cfg_bind_addr == "0.0.0.0" || cfg_bind_addr == "")
 	{

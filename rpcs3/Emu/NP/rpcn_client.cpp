@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "Emu/Cell/lv2/sys_net/sys_net_helpers.h"
+#include "Emu/Cell/lv2/sys_net/psas_connector.h"
 #include "Emu/NP/ip_address.h"
 #include <string>
 #include <mutex>
@@ -560,6 +561,16 @@ namespace rpcn
 						write_to_ptr<be_t<u32>>(ping, 9, +local_addr_sig);
 						return ping;
 					};
+
+					// ASBR connector mode: the P2P port is bound to loopback for the connector, the ping could not reach
+					// RPCN (np_handler does not wait for its reply); just wait for termination or the next message
+					if (sys_net_helpers::psas_connector_mode_active())
+					{
+						if (!sem_rpcn.try_acquire_for(5s))
+						{
+						}
+						continue;
+					}
 
 					// Send a packet every 5 seconds and then every 500 ms until reply is received
 					if (time_since_last_ipv4_pong >= 5s && time_since_last_ipv4_ping > 500ms)

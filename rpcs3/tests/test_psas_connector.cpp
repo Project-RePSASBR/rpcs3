@@ -53,21 +53,21 @@ TEST(PsasConnector, RetailTitleGate)
 TEST(PsasConnector, ForkVersionComposition)
 {
 	static_assert(PSAS_FORK_NAME == "rpsascs3");
-	static_assert(PSAS_FORK_REVISION == 1);
+	static_assert(PSAS_FORK_REVISION == 2);
 
 	// Local build (this tree) and CI-style upstream strings fit whole, release type included
-	EXPECT_EQ(compose_psas_fork_version("0.0.42-2378b3c0 Alpha"), "rpsascs3 r1 0.0.42-2378b3c0 Alpha");
-	EXPECT_EQ(compose_psas_fork_version("0.0.42-17345-abcdef12 Alpha"), "rpsascs3 r1 0.0.42-17345-abcdef12 Alpha");
+	EXPECT_EQ(compose_psas_fork_version("0.0.42-2378b3c0 Alpha"), "rpsascs3 r2 0.0.42-2378b3c0 Alpha");
+	EXPECT_EQ(compose_psas_fork_version("0.0.42-17345-abcdef12 Alpha"), "rpsascs3 r2 0.0.42-17345-abcdef12 Alpha");
 
 	// Over 40 bytes: the release type goes, the build hash stays
-	EXPECT_EQ(compose_psas_fork_version("0.0.42-17345-abcdef12 Alpha 2"), "rpsascs3 r1 0.0.42-17345-abcdef12");
+	EXPECT_EQ(compose_psas_fork_version("0.0.42-17345-abcdef12 Alpha 2"), "rpsascs3 r2 0.0.42-17345-abcdef12");
 
 	// Name and revision always survive the encoder's 40-byte clamp
 	const std::string very_long = compose_psas_fork_version(std::string(60, 'x'));
 	const std::vector<u8> datagram = encode_psas_connector_hello({.fork_version = very_long});
 
 	ASSERT_EQ(datagram[10], PSAS_HELLO_MAX_FORK_VERSION);
-	EXPECT_EQ(std::string(datagram.begin() + 11, datagram.begin() + 11 + 12), "rpsascs3 r1 ");
+	EXPECT_EQ(std::string(datagram.begin() + 11, datagram.begin() + 11 + 12), "rpsascs3 r2 ");
 }
 
 TEST(PsasConnector, HelloWireFormat)
@@ -89,7 +89,7 @@ TEST(PsasConnector, HelloWireFormat)
 		{0x0B},               // flags: loopback bind | forward | title gate
 		{0},                  // reserved
 		{0xD0, 0x07},         // interval 2000 ms, little endian
-		{33}, bytes_of("rpsascs3 r1 0.0.42-2378b3c0 Alpha"),
+		{33}, bytes_of("rpsascs3 r2 0.0.42-2378b3c0 Alpha"),
 		{9}, bytes_of("BCES01435"),
 		{14}, bytes_of("127.0.0.1:3658"),
 	});
@@ -144,4 +144,16 @@ TEST(PsasConnector, HelloForkVersionClamp)
 
 	EXPECT_EQ(clamped[10], 39);
 	EXPECT_EQ(clamped.size(), PSAS_HELLO_MIN_SIZE + 39);
+}
+
+// Connector mode keeps RPCN off loopback: a 127.x bind becomes 0.0.0.0, other addresses stay (network byte order)
+TEST(PsasConnector, RpcnBindingIp)
+{
+	constexpr auto addr = [](u8 a, u8 b, u8 c, u8 d) { return std::bit_cast<u32>(std::array<u8, 4>{a, b, c, d}); };
+
+	static_assert(psas_rpcn_binding_ip(addr(127, 0, 0, 1)) == 0);
+	EXPECT_EQ(psas_rpcn_binding_ip(addr(127, 0, 0, 2)), 0u);
+	EXPECT_EQ(psas_rpcn_binding_ip(0), 0u);
+	EXPECT_EQ(psas_rpcn_binding_ip(addr(192, 168, 1, 20)), addr(192, 168, 1, 20));
+	EXPECT_EQ(psas_rpcn_binding_ip(addr(10, 127, 0, 1)), addr(10, 127, 0, 1));
 }

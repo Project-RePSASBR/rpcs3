@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/Cell/lv2/sys_net/psas_connector.h"
 #include "Emu/system_config.h"
 #include "Emu/NP/np_handler.h"
 #include "Emu/Cell/PPUCallback.h"
@@ -431,7 +432,7 @@ namespace np
 			nc.bind_sce_np_port();
 
 			std::lock_guard lock(mutex_rpcn);
-			rpcn = rpcn::rpcn_client::get_instance(bind_ip);
+			rpcn = rpcn::rpcn_client::get_instance(resolve_rpcn_binding_ip());
 		}
 	}
 
@@ -787,6 +788,17 @@ namespace np
 			ensure(!s_npid.empty()); // It should have been generated before this
 
 			string_to_npid(s_npid, npid);
+
+			// PSASBR: real PSN NpIds carry 1 in reserved[0] (+0x1c, "is valid"). The game sends its own NpId to the
+			// other consoles (LAN join response, party roster, match player info) and a real Vita's sceNpCmpNpId
+			// rejects an NpId without it (SCE_NP_UTIL_ERROR_INVALID_NP_ID), so UserInfo_Equal never matches the
+			// host's roster entry to its record and the client re-adds the RPCS3 player every 0.5 s (players
+			// swapping slots). Other titles keep the stock zero byte.
+			if (sys_net_helpers::is_psas_title_gate_matched())
+			{
+				npid.reserved[0] = 1;
+			}
+
 			auto& sigh = g_fxo->get<named_thread<signaling_handler>>();
 			sigh.set_self_sig_info(npid);
 		}
@@ -812,7 +824,7 @@ namespace np
 
 			if (!rpcn)
 			{
-				rpcn = rpcn::rpcn_client::get_instance(bind_ip);
+				rpcn = rpcn::rpcn_client::get_instance(resolve_rpcn_binding_ip());
 				was_already_started = false;
 			}
 
@@ -839,6 +851,18 @@ namespace np
 
 			string_to_online_name(rpcn->get_online_name(), online_name);
 			string_to_avatar_url(rpcn->get_avatar_url(), avatar_url);
+
+			// ASBR connector mode: the RPCN UDP signaling ping would leave through the loopback-bound P2P port and
+			// never get a reply, so it is not sent (rpcn_client) and not waited for; the game keeps seeing the
+			// loopback address the connector expects (bind_ip, set by resolve_binding_ip()) as local and public
+			if (sys_net_helpers::psas_connector_mode_active() && bind_ip)
+			{
+				public_ip_addr = bind_ip;
+				local_ip_addr  = bind_ip;
+				rpcn_log.notice("ASBR connector mode: RPCN signed in over TCP, UDP signaling skipped, game addresses kept at %s", ip_to_string(bind_ip));
+				break;
+			}
+
 			public_ip_addr = rpcn->get_addr_sig();
 
 			if (!public_ip_addr)
