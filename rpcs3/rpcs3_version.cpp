@@ -68,4 +68,11 @@ namespace rpcs3
 		static constexpr bool is_local_build = std::string_view(RPCS3_GIT_FULL_BRANCH) == "local_build"sv;
 		return is_local_build;
 	}
+
+	bool is_asmm_build()
+	{
+		// CI builds of the All-Stars Matchmaker fork (any branch of Project-RePSASBR/rpcs3)
+		static constexpr bool is_asmm_build = std::string_view(RPCS3_GIT_FULL_BRANCH).starts_with("Project-RePSASBR/rpcs3/"sv);
+		return is_asmm_build;
+	}
 }

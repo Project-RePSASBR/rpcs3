@@ -112,7 +112,8 @@ int gui_application::exec()
 		func();
 	};
 
-	if (!rpcs3::is_release_build() && !rpcs3::is_local_build())
+	// ASMM fork: our own CI releases skip this dialog; the welcome dialog tells users this is a custom build instead
+	if (!rpcs3::is_release_build() && !rpcs3::is_local_build() && !rpcs3::is_asmm_build())
 	{
 		steps->push_back([this]()
 		{
