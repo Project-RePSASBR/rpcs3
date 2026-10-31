@@ -94,9 +94,22 @@ jobs:
             echo "|---|---|"
 
             for file in release/*; do
+              case "$file" in
+                *_linux64.AppImage)        label='Linux x64' ;;
+                *_linux_aarch64.AppImage)  label='Linux ARM64' ;;
+                *_macos.7z)                label='MacOS Intel' ;;
+                *_macos_aarch64.7z)        label='MacOS Apple Silicon' ;;
+                *_win64_aarch64_clang.7z)  label='Windows ARM64' ;;
+                *_win64_msvc.7z)           label='Windows x64' ;;
+                *)
+                  echo "::error::No OS label for $(basename "$file")"
+                  exit 1
+                  ;;
+              esac
+
               hash=$(sha256sum "$file" | awk '{ print $1 }')
               echo "$hash" > "$file.sha256"
-              echo "| $(basename "$file") | \`$hash\` |"
+              echo "| ${label}: $(basename "$file") | \`$hash\` |"
             done
           } > notes.md
 
