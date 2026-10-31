@@ -38,12 +38,19 @@ welcome_dialog::welcome_dialog(std::shared_ptr<gui_settings> gui_settings, bool 
 		"To get started, you must first install the %0.\n"
 		"Please refer to the %1 guide found on the official website for further information.\n"
 		"If you have any further questions, please refer to the %2.\n"
-		"Otherwise, further discussion and support can be found on the %3 or on our %4 server.")
+		"\n"
+		"%3")
 		.arg(gui::utils::make_bold(tr("PlayStation 3 firmware")))
 		.arg(gui::utils::make_link(tr("Quickstart"), "https://rpcs3.net/quickstart"))
 		.arg(gui::utils::make_link(tr("FAQ"), "https://rpcs3.net/faq"))
-		.arg(gui::utils::make_link(tr("Forums"), "https://forums.rpcs3.net"))
-		.arg(gui::utils::make_link(tr("Discord"), "https://discord.gg/rpcs3"))));
+		// ASMM fork: replaces the official support channels, which must not be bothered with this build
+		.arg(QString("<span style=\"font-weight:600; color:#ff0000;\">%0</span>").arg(tr(
+			"This is a custom RPCS3 fork that adds support for ASMM.<br>"
+			"Do not go to the official channels or ask the original devs<br>"
+			"for support when using this version.<br>"
+			"It's recommended to use it only for PlayStation All-Stars Battle Royale.<br>"
+			"For any issues or source code check the %0.")
+			.arg(gui::utils::make_link(tr("GitHub page"), "https://github.com/Project-RePSASBR/rpcs3"))))));
 
 #ifdef __APPLE__
 	ui->create_applications_menu_shortcut->setText(tr("&Create Launchpad shortcut"));

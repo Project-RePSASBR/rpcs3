@@ -17,7 +17,7 @@
    </sizepolicy>
   </property>
   <property name="windowTitle">
-   <string>Welcome to RPCS3</string>
+   <string>Welcome to RPCS3 for ASMM</string>
   </property>
   <property name="windowIcon">
    <iconset resource="../resources.qrc">
@@ -95,7 +95,7 @@
              </font>
             </property>
             <property name="text">
-             <string>RPCS3 PlayStation 3 Emulator</string>
+             <string>RPCS3 for All-Stars Matchmaker (ASMM)</string>
             </property>
             <property name="alignment">
              <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
