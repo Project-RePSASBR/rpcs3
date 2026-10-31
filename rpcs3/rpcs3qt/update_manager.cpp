@@ -53,6 +53,30 @@ LOG_CHANNEL(update_log, "UPDATER");
 
 constexpr bool allow_local_auto_update = false; // Set true for debugging the auto updater locally
 
+// ASMM fork: updates are the published releases of Project-RePSASBR/rpcs3 (drafts and pre-releases are ignored).
+// Each release carries one asset per platform named rpcs3-ASBR-v<version>-<commit count>-<commit hash><suffix>.
+constexpr std::string_view asmm_releases_api = "https://api.github.com/repos/Project-RePSASBR/rpcs3/releases?per_page=30";
+constexpr std::string_view asmm_download_prefix = "https://github.com/Project-RePSASBR/rpcs3/releases/download/";
+
+static QString asmm_asset_suffix()
+{
+#if defined(_WIN32) && defined(ARCH_ARM64)
+	return QStringLiteral("_win64_aarch64_clang.7z");
+#elif defined(_WIN32)
+	return QStringLiteral("_win64_msvc.7z");
+#elif defined(__linux__) && defined(ARCH_ARM64)
+	return QStringLiteral("_linux_aarch64.AppImage");
+#elif defined(__linux__)
+	return QStringLiteral("_linux64.AppImage");
+#elif defined(__APPLE__) && defined(ARCH_ARM64)
+	return QStringLiteral("_macos_aarch64.7z");
+#elif defined(__APPLE__)
+	return QStringLiteral("_macos.7z");
+#else
+	return {};
+#endif
+}
+
 update_manager::update_manager(QObject* parent, std::shared_ptr<gui_settings> gui_settings)
 	: QObject(parent), m_gui_settings(std::move(gui_settings))
 {
@@ -111,12 +135,8 @@ void update_manager::check_for_updates(bool automatic, bool check_only, bool aut
 		Q_EMIT signal_update_available(result_json && m_update_info.update_found);
 	});
 
-	const utils::OS_version os = utils::get_OS_version();
-
-	const std::string url = fmt::format("https://update.rpcs3.net/?api=v3&c=%s&os_type=%s&os_arch=%s&os_version=%i.%i.%i",
-		rpcs3::get_commit_and_hash().second, os.type, os.arch, os.version_major, os.version_minor, os.version_patch);
-
-	m_downloader->start(url, true, !automatic, true, tr("Checking For Updates"), true);
+	// ASMM fork: ask the fork's GitHub releases instead of update.rpcs3.net, which only knows official builds
+	m_downloader->start(std::string(asmm_releases_api), true, !automatic, true, tr("Checking For Updates"), true);
 }
 
 bool update_manager::handle_json(bool automatic, bool check_only, bool auto_accept, const QByteArray& data)
@@ -126,89 +146,97 @@ bool update_manager::handle_json(bool automatic, bool check_only, bool auto_acce
 	QJsonParseError error {};
 	const QJsonDocument json_document = QJsonDocument::fromJson(data, &error);
 
-	if (!json_document.isObject())
+	if (!json_document.isArray())
 	{
-		update_log.error("Update error - Invalid JSON: '%s'", error.errorString());
+		update_log.error("Update error - Invalid JSON (expected the GitHub release list): '%s'", error.errorString());
 		return false;
 	}
 
-	const QJsonObject json_data = json_document.object();
-	const int return_code       = json_data["return_code"].toInt(-255);
+	const QString suffix = asmm_asset_suffix();
 
-	m_update_info.hash_found = true;
-
-	if (return_code < 0)
+	if (suffix.isEmpty())
 	{
-		std::string error_message;
-		switch (return_code)
-		{
-		case -1: error_message = "Hash not found (Custom/PR build)"; break;
-		case -2: error_message = "Server Error - Maintenance Mode"; break;
-		case -3: error_message = "Server Error - Illegal Search"; break;
-		case -255: error_message = "Server Error - Return code not found"; break;
-		default: error_message = "Server Error - Unknown Error"; break;
-		}
+		update_log.error("Your OS isn't currently supported by the auto-updater");
+		return false;
+	}
 
-		if (return_code != -1)
-			update_log.error("Update error: %s, return code: %d", error_message, return_code);
-		else
-			update_log.warning("Update error: %s, return code: %d", error_message, return_code);
+	struct asmm_release
+	{
+		QString tag;
+		QString name;
+		QDateTime date;
+		QString hash;
+		QString download;
+		QString checksum;
+		u64 size = 0;
+	};
+
+	// Collect every published release that ships a build for this platform
+	std::vector<asmm_release> releases;
+
+	for (const QJsonValue& release_value : json_document.array())
+	{
+		const QJsonObject release = release_value.toObject();
+
+		if (release["draft"].toBool() || release["prerelease"].toBool())
+			continue;
+
+		for (const QJsonValue& asset_value : release["assets"].toArray())
+		{
+			const QJsonObject asset = asset_value.toObject();
+			const QString asset_name = asset["name"].toString();
+
+			if (!asset_name.endsWith(suffix))
+				continue;
+
+			// GitHub publishes the SHA-256 of every release asset as "sha256:<hex>"
+			const QString digest = asset["digest"].toString();
+
+			if (!digest.startsWith(QStringLiteral("sha256:")))
+			{
+				update_log.warning("Release '%s': asset '%s' has no SHA-256 digest", release["tag_name"].toString(), asset_name);
+				break;
+			}
+
+			asmm_release entry;
+			entry.tag      = release["tag_name"].toString();
+			entry.name     = release["name"].toString();
+			entry.date     = QDateTime::fromString(release["published_at"].toString(), Qt::ISODate);
+			entry.hash     = asset_name.chopped(suffix.size()).section('-', -1); // rpcs3-ASBR-v0.0.43-20447-17dfebf2_win64_msvc.7z -> 17dfebf2
+			entry.download = asset["browser_download_url"].toString();
+			entry.checksum = digest.mid(7).toUpper();
+			entry.size     = static_cast<u64>(asset["size"].toInteger());
+			releases.push_back(std::move(entry));
+			break;
+		}
+	}
+
+	if (releases.empty())
+	{
+		update_log.error("No published RPCS3 ASMM release contains a '%s' build", suffix);
+		return false;
+	}
+
+	// Newest first
+	std::stable_sort(releases.begin(), releases.end(), [](const asmm_release& a, const asmm_release& b) { return a.date > b.date; });
+
+	const asmm_release& latest = releases.front();
+	const QString current_hash = QString::fromStdString(rpcs3::get_commit_and_hash().second);
+	const auto current = std::find_if(releases.cbegin(), releases.cend(), [&current_hash](const asmm_release& r) { return r.hash == current_hash; });
+
+	m_update_info.hash_found = current != releases.cend();
+
+	if (!m_update_info.hash_found)
+	{
+		update_log.warning("Update error: this build (%s) is not a published RPCS3 ASMM release", current_hash);
 
 		// If a user clicks "Check for Updates" with a custom build ask him if he's sure he wants to update to latest version
-		if (!allow_local_auto_update && (automatic || return_code != -1))
+		if (!allow_local_auto_update && automatic)
 		{
 			return false;
 		}
-
-		m_update_info.hash_found = false;
 	}
-
-	const auto& current = json_data["current_build"];
-	const auto& latest = json_data["latest_build"];
-
-	if (!latest.isObject())
-	{
-		update_log.error("JSON doesn't contain latest_build section");
-		return false;
-	}
-
-	QString os;
-
-#ifdef _WIN32
-	os = "windows";
-#elif defined(__linux__)
-	os = "linux";
-#elif defined(__APPLE__)
-	os = "mac";
-#else
-	update_log.error("Your OS isn't currently supported by the auto-updater");
-	return false;
-#endif
-
-	// Check that every bit of info we need is there
-	const auto check_json = [](bool cond, std::string_view msg) -> bool
-	{
-		if (cond) return true;
-		update_log.error("%s", msg);
-		return false;
-	};
-	if (!(check_json(latest[os].isObject(), fmt::format("Node 'latest_build: %s' not found", os)) &&
-	      check_json(latest[os]["download"].isString(), fmt::format("Node 'latest_build: %s: download' not found or not a string", os)) &&
-	      check_json(latest[os]["size"].isDouble(), fmt::format("Node 'latest_build: %s: size' not found or not a double", os)) &&
-	      check_json(latest[os]["checksum"].isString(), fmt::format("Node 'latest_build: %s: checksum' not found or not a string", os)) &&
-	      check_json(latest["version"].isString(), "Node 'latest_build: version' not found or not a string") &&
-	      check_json(latest["datetime"].isString(), "Node 'latest_build: datetime' not found or not a string")
-	     ) ||
-	     (m_update_info.hash_found && !(
-	      check_json(current.isObject(), "JSON doesn't contain current_build section") &&
-	      check_json(current["version"].isString(), "Node 'current_build: datetime' not found or not a string") &&
-	      check_json(current["datetime"].isString(), "Node 'current_build: version' not found or not a string")
-	     )))
-	{
-		return false;
-	}
-
-	if (m_update_info.hash_found && return_code == 0)
+	else if (current == releases.cbegin())
 	{
 		update_log.success("RPCS3 is up to date!");
 		m_downloader->close_progress_dialog();
@@ -222,31 +250,40 @@ bool update_manager::handle_json(bool automatic, bool check_only, bool auto_acce
 	// Calculate how old the build is
 	const QString date_fmt = QStringLiteral("yyyy-MM-dd hh:mm:ss");
 
-	const QDateTime cur_date = m_update_info.hash_found ? QDateTime::fromString(current["datetime"].toString(), date_fmt) : QDateTime::currentDateTimeUtc();
-	const QDateTime lts_date = QDateTime::fromString(latest["datetime"].toString(), date_fmt);
+	const QDateTime cur_date = m_update_info.hash_found ? current->date : QDateTime::currentDateTimeUtc();
+	const QDateTime lts_date = latest.date;
 
 	m_update_info.update_found = true;
 	m_update_info.cur_date = cur_date.toString(date_fmt);
 	m_update_info.lts_date = lts_date.toString(date_fmt);
 	m_update_info.diff_msec = cur_date.msecsTo(lts_date);
-	m_update_info.new_version = latest["version"].toString();
+	m_update_info.new_version = latest.tag;
 
 	if (m_update_info.hash_found)
 	{
-		m_update_info.old_version = current["version"].toString();
+		m_update_info.old_version = current->tag;
 	}
 	else
 	{
 		m_update_info.old_version = QString::fromStdString(fmt::format("%s-%s-%s", rpcs3::get_full_branch(), rpcs3::get_branch(), rpcs3::get_version().to_string()));
 	}
 
+	// The changelog lists every release newer than the running one (only the latest one for unknown builds)
+	for (auto it = releases.cbegin(); it != (m_update_info.hash_found ? current : releases.cbegin() + 1); ++it)
+	{
+		changelog_data entry;
+		entry.version = it->tag;
+		entry.title = it->name;
+		m_update_info.changelog.push_back(std::move(entry));
+	}
+
 	update_log.notice("Current: %s, latest: %s, difference: %lld ms", m_update_info.cur_date, m_update_info.lts_date, m_update_info.diff_msec);
 
-	m_request_url   = latest[os]["download"].toString().toStdString();
-	m_expected_hash = latest[os]["checksum"].toString().toStdString();
-	m_expected_size = latest[os]["size"].toInt();
+	m_request_url   = latest.download.toStdString();
+	m_expected_hash = latest.checksum.toStdString();
+	m_expected_size = latest.size;
 
-	if (!m_request_url.starts_with("https://github.com/RPCS3/rpcs3"))
+	if (!m_request_url.starts_with(asmm_download_prefix))
 	{
 		update_log.fatal("Bad url: %s", m_request_url);
 		return false;
@@ -261,53 +298,6 @@ bool update_manager::handle_json(bool automatic, bool check_only, bool auto_acce
 			update_log.notice("Skipping automatic update notification for version '%s' due to user preference", m_update_info.new_version);
 			m_downloader->close_progress_dialog();
 			return true;
-		}
-
-		const auto& changelog = json_data["changelog"];
-
-		if (changelog.isArray())
-		{
-			for (const QJsonValue& changelog_entry : changelog.toArray())
-			{
-				if (changelog_entry.isObject())
-				{
-					changelog_data entry;
-
-					if (QJsonValue version = changelog_entry["version"]; version.isString())
-					{
-						entry.version = version.toString();
-					}
-					else
-					{
-						update_log.notice("JSON changelog entry does not contain a version string.");
-					}
-
-					if (QJsonValue title = changelog_entry["title"]; title.isString())
-					{
-						entry.title = title.toString();
-					}
-					else
-					{
-						update_log.notice("JSON changelog entry does not contain a title string.");
-					}
-
-					entry.pr = changelog_entry["pr"].toInt();
-
-					m_update_info.changelog.push_back(std::move(entry));
-				}
-				else
-				{
-					update_log.error("JSON changelog entry is not an object.");
-				}
-			}
-		}
-		else if (changelog.isObject())
-		{
-			update_log.error("JSON changelog is not an array.");
-		}
-		else
-		{
-			update_log.notice("JSON does not contain a changelog section.");
 		}
 	}
 
@@ -340,7 +330,7 @@ void update_manager::update(bool auto_accept, bool is_first_call)
 		}
 
 		const Localized localized;
-		const QString support_message = tr("<br>You can empower our project at <a href=\"https://rpcs3.net/patreon\">RPCS3 Patreon</a>.<br>");
+		const QString support_message = tr("<br>RPCS3 for ASMM is built on the work of the RPCS3 team. You can support them at <a href=\"https://rpcs3.net/patreon\">RPCS3 Patreon</a>.<br>");
 		QString update_message;
 
 		if (m_update_info.hash_found)
@@ -348,7 +338,7 @@ void update_manager::update(bool auto_accept, bool is_first_call)
 			if (m_update_info.diff_msec < 0)
 			{
 				// This usually means that the current version was marked as broken and won't be shipped anymore, so we need to downgrade to avoid certain bugs.
-				update_message = tr("A better version of RPCS3 is available!<br><br>Current version: %0 (%1)<br>Better version: %2 (%3)<br>%4")
+				update_message = tr("A better version of RPCS3 for ASMM is available!<br><br>Current version: %0 (%1)<br>Better version: %2 (%3)<br>%4")
 					.arg(m_update_info.old_version)
 					.arg(m_update_info.cur_date)
 					.arg(m_update_info.new_version)
@@ -357,7 +347,7 @@ void update_manager::update(bool auto_accept, bool is_first_call)
 			}
 			else
 			{
-				update_message = tr("A new version of RPCS3 is available!<br><br>Current version: %0 (%1)<br>Latest version: %2 (%3)<br>Your version is %4 behind.<br>%5")
+				update_message = tr("A new version of RPCS3 for ASMM is available!<br><br>Current version: %0 (%1)<br>Latest version: %2 (%3)<br>Your version is %4 behind.<br>%5")
 					.arg(m_update_info.old_version)
 					.arg(m_update_info.cur_date)
 					.arg(m_update_info.new_version)
@@ -368,7 +358,7 @@ void update_manager::update(bool auto_accept, bool is_first_call)
 		}
 		else
 		{
-			update_message = tr("You're currently using a custom or PR build.<br><br>Latest version: %0 (%1)<br>The latest version is %2 old.<br>%3")
+			update_message = tr("You're currently using a build that is not an RPCS3 for ASMM release.<br><br>Latest version: %0 (%1)<br>The latest version is %2 old.<br>%3")
 				.arg(m_update_info.new_version)
 				.arg(m_update_info.lts_date)
 				.arg(localized.GetVerboseTimeByMs(std::abs(m_update_info.diff_msec), true))
@@ -484,7 +474,7 @@ void update_manager::update(bool auto_accept, bool is_first_call)
 			// "Do you want to update?" label
 			const QString prompt_text = m_update_info.hash_found
 				? tr("Do you want to update?")
-				: tr("Do you want to update to the latest official RPCS3 version?");
+				: tr("Do you want to update to the latest RPCS3 for ASMM release?");
 			QLabel* prompt_label = new QLabel(prompt_text, &mb);
 			grid->addWidget(prompt_label, row++, 0, 1, cols);
 
